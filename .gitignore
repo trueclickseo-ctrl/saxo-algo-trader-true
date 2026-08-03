@@ -1,0 +1,23 @@
+# Secrets — NEVER commit these
+saxo_token.json
+.env
+*.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Regenerable data — large historical price CSVs, re-downloadable via data_loader.py
+data/*.csv
+!data/instrument_map.csv
+!data/index_map.csv
+
+# Runtime state — regenerates automatically, not meaningful history
+data/daily_state.json
+results/
+STOP_TRADING
+
+# OS clutter
+.DS_Store
+Thumbs.db
