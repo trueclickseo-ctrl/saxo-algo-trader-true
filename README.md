@@ -1,210 +1,214 @@
-# OMX30 Trend-Following Algo — Phase 1: Backtesting
+# Algorithmic Trading Operating System (ATOS) v1
+## Saxo Bank SIM — Paper Trading on OMX30, NASDAQ100, S&P500, DAX40, Gold, Oil & Forex
 
-This is **Phase 1 of 4**. It does not place any trades, real or simulated —
-it only tests whether the strategy rules would have made money historically.
-That's the correct order: prove the logic before risking anything, even
-paper money.
+> **This is SIM / paper money only.** All orders go to Saxo's simulation gateway.
+> No real money is at risk until you deliberately move to Phase 3 (see Roadmap below).
 
-## What this system does
+---
 
-A long-only trend-following strategy on OMX30 stocks:
-- **Buys** a stock when its 20-day average price crosses above its 50-day
-  average (a confirmed uptrend starting)
-- **Sells** when the trend reverses, or earlier if the price hits a
-  volatility-based stop-loss
-- Never risks more than 1% of capital on a single trade
-- Never holds more than 5 positions at once
-- Has a daily circuit breaker: if the account is down 3% in a day, it
-  stops opening new trades until the next day
+## What This System Does
 
-## How to run it (no coding needed — just follow these steps)
+ATOS is a **multi-market daily algo trading system** that:
 
-1. **Install Python** if you don't have it: https://www.python.org/downloads/
-   (tick "Add Python to PATH" during install on Windows)
+- Scans **~80 instruments** across 7 markets every day
+- Uses a **Decision Engine** with 5 signal detectors to score every ticker
+- Places trades automatically on **Saxo SIM** (paper money)
+- **Learns from every closed trade** — detector weights adapt over time
+- Generates a **live HTML dashboard** at [namazic.com/atos](https://namazic.com/atos/) each morning
+- Logs everything permanently to a **SQLite database** (`data/atos.db`)
 
-2. **Open a terminal** in this folder (on Windows: Shift+Right-click the
-   folder → "Open PowerShell window here"; on Mac: right-click → Services
-   → "New Terminal at Folder")
+---
 
-3. **Install the dependencies** (one-time):
-   ```
-   pip install -r requirements.txt
-   ```
+## The 7 Markets (Ranked by Historical Algo Profitability)
 
-4. **Run the backtest**:
-   ```
-   python main.py
-   ```
+| Tier | Market | Tickers | Why Included |
+|---|---|---|---|
+| 🥇 Core | **US Equities** (S&P500 + NASDAQ100) | ~35 | Highest Sharpe, best trend-following market |
+| 🥇 Core | **Gold + Commodities** (GLD, SLV, USO, GDX) | 4 | Non-correlated, trends for months |
+| 🥈 Strong | **DAX40** (Germany) | 10 | Europe's most liquid, good trends |
+| 🥈 Strong | **OMX30** (Sweden) | 15 | Home market, good liquidity |
+| 🥉 Diversifier | **Forex** (EUR/USD, GBP/USD, USD/JPY) | 3 | Counter-equity, trends on rate differentials |
 
-5. Read the results printed in the terminal, and open
-   `results/trade_log.csv` in Excel to see every single trade in detail.
+---
 
-## What the results mean
+## The Decision Engine
 
-- `total_return_pct` — how much the account grew/shrank over the backtest period
-- `max_drawdown_pct` — the worst peak-to-trough loss during the period (this
-  tells you how much pain you'd need to tolerate — a strategy with 40%+
-  drawdown is not "solid" even if the total return looks good)
-- `win_rate_pct` — % of trades that were profitable (trend-following systems
-  often have LOW win rates like 30-40% and are still profitable — see below)
-- `avg_win` vs `avg_loss` — this ratio is what actually matters, not win rate
+For every ticker, every day, ATOS runs **5 signal detectors** and combines them into a score:
 
-## Important, honestly
-
-- Nothing here guarantees future profit. Markets shift. A strategy that
-  worked 2018-2024 can stop working. That's why the risk management layer
-  (position sizing, stops, daily loss limit) exists — it's there to make
-  sure that when the strategy is wrong, it's wrong small.
-- This is not financial advice. You are responsible for every trade this
-  system ever places, paper or real.
-- I'm not a licensed financial advisor — treat this as an engineering
-  collaborator, not investment counsel.
-
-## Roadmap (what comes next, once you're happy with backtest results)
-
-1. ✅ **Phase 1 — Backtest** (this): prove the logic on historical data
-2. ✅ **Phase 2 — Automated paper trading on Saxo SIM**: `saxo_live_engine.py`
-   connects the strategy directly to Saxo's SIM order placement — see below
-3. **Phase 3 — Live with minimum capital**: only after Phase 2 shows
-   consistent, risk-controlled behavior — connect to your real (small)
-   Saxo account
-4. **Phase 4 — Monitoring & iteration**: dashboards/alerts so you always
-   know what the bot is doing, plus periodic strategy review
-
-## Phase 2 — Automated SIM trading
-
-`saxo_live_engine.py` runs one full decision cycle: fetch current prices,
-generate signals, check risk limits and the kill switch, and place real
-(SIM/paper) orders on Saxo for anything that passes. It's designed to run
-**once per trading day** (see `saxo_live_main.py` for why, and how to
-schedule it) — not a polling loop, since the strategy trades on daily bars.
-
-**This is SIM only.** See the safety banner at the top of
-`saxo_live_engine.py` — `saxo_client.py` hardcodes Saxo's simulation
-gateway; there is no live-trading endpoint anywhere in this project.
-
-**What it does each cycle:**
-1. Checks the kill switch and daily loss cap (against Saxo's *real*
-   reported equity, not a local estimate)
-2. Fetches your actual open positions from Saxo (source of truth — not a
-   locally simulated portfolio, since these are real SIM orders)
-3. For each held position: checks the ATR stop and trend-reversal exit,
-   sells via `place_market_order` if triggered
-4. For each signal ticker not already held (up to `MAX_OPEN_POSITIONS`):
-   sizes the position with the same risk-based `position_size()` as the
-   backtest, checks it against actual cash available, and buys if it fits
-5. Logs every order attempt — filled, blocked, or failed — to
-   `results/live_order_log.csv`
-
-**Running it:**
 ```
-python saxo_live_main.py
+Score = Weighted Average of 5 Detectors  (-100 to +100)
+
+  Detector 1 — Trend       EMA 20/50/200 alignment + ADX strength
+  Detector 2 — Momentum    RSI crossing 50 + MACD direction
+  Detector 3 — Breakout    Donchian Channel (Turtle Trader method)
+  Detector 4 — Mean Revert Bollinger Band extremes + RSI oversold
+  Detector 5 — Volume      Relative volume vs 20-day average
+
+  Score ≥ 55  →  BUY signal
+  Score ≤ 20  →  EXIT signal (on open position)
 ```
 
-**Scheduling it** (so it runs automatically once per day): see the
-docstring at the top of `saxo_live_main.py` for Windows Task Scheduler
-setup steps.
+### Self-Learning Weights
 
-**Kill switch:** create an empty file named `STOP_TRADING` in this
-project's root folder at any time to halt all trading immediately. Delete
-it to resume.
+The system starts with **equal weights** for all 5 detectors. After every closed trade:
 
-**Before this ever becomes Phase 3:** run it for real, for weeks, and read
-`results/live_order_log.csv` critically — does it behave the way the
-backtest predicted? Do the blocked/failed entries reveal anything about
-real order execution the backtest couldn't see (slippage, rejected orders,
-liquidity)? Going live should stay a deliberate, separate decision — not
-a natural continuation of this file.
+- **Profitable trade** → detectors that said BUY get rewarded (+0.06)
+- **Loss trade** → detectors that warned us get rewarded; those that said BUY get penalised (-0.04)
+- Weights are normalized after every update, bounded between 0.30 and 2.50
 
-## Change log
+Over hundreds of trades, the best predictors for *your specific markets* earn more influence automatically.
 
-### Aug 2026 — fixed oversized/rejected live BUY orders
+---
 
-**Symptom:** `saxo_live_engine.py` was placing BUY orders for thousands of
-shares (hundreds of thousands to millions of SEK notional per order) that
-Saxo's SIM API rejected with `400 Client Error: Bad Request`.
+## Risk Rules (Hard — Never Bypassed)
 
-**Root causes found and fixed:**
-
-1. **Position sizing used live Saxo account equity, not
-   `config.STARTING_CAPITAL`.** `backtest.py` sizes every trade off the
-   10,000 SEK `STARTING_CAPITAL` — the number Phase 1 actually validated.
-   `saxo_live_engine.py` was instead pulling live equity from
-   `balances["TotalValue"]`. Saxo's SIM/demo account here is funded far
-   above 10,000 SEK (it's a separate practice account from the user's real
-   live account — see point 3), so 1% risk of that inflated balance
-   produced wildly oversized orders.
-   **Fix:** added a local risk-capital tracker
-   (`kill_switch.get_risk_capital()` / `record_fill()`, persisted to
-   `data/risk_capital.json`) that starts at `config.STARTING_CAPITAL` and
-   moves exactly like `backtest.py`'s `self.capital` — down by cost on a
-   filled buy, up by proceeds on a filled sell. Live Saxo equity/cash are
-   still used as a hard affordability backstop, just not as the sizing
-   basis.
-
-2. **No per-instrument currency conversion.** `fx.py` originally only
-   converted the *account's* currency into SEK. But `config.ACTIVE_UNIVERSE`
-   has grown well past OMX30 to include Nasdaq-100 (USD), Germany/France/
-   Netherlands (EUR), UK (GBP), Switzerland (CHF), Canada (CAD), and Japan
-   (JPY) — none of those instrument prices were being converted, so sizing
-   and cash checks silently compared, e.g., a raw EUR price for `PRX.AS`
-   against SEK cash as if they were the same currency.
-   **Fix:** `fx.py` now has a generic `get_rate_to_sek(currency)`;
-   `instrument_map.py` now surfaces each ticker's `currency` (from
-   `data/instrument_map.csv`, already populated by `lookup_instruments.py`
-   but previously unused); `saxo_live_engine.py` converts each instrument's
-   entry/stop price into SEK before sizing or checking cash.
-
-3. **The Saxo SIM/demo account is EUR-denominated; the user's real, live
-   Saxo account is SEK.** These are two separate accounts with
-   independently assigned base currencies — this is expected Saxo
-   behavior, not a bug. The fx handling above already accounts for it
-   generically (works for whatever currency the SIM account reports, not
-   hardcoded to EUR or SEK).
-
-4. **Order failures were logged without Saxo's actual rejection reason.**
-   `saxo_client.place_market_order()` let `requests` raise its generic
-   `"400 Client Error: Bad Request for url: ..."` message, which drops the
-   response body — exactly where Saxo puts the real reason.
-   **Fix:** the response body is now captured and appended to the raised
-   error, so `results/live_order_log.csv`'s `order_response` column shows
-   the actual reason for any future failure.
-
-5. **Found via fix #4, same day:** once sizing was fixed and orders were
-   reasonably sized again, they still failed — but now with a real reason:
-   `"The current platform requires ManualOrder to be specified as true or
-   false on all orders."` Saxo added this as a required order field at
-   some point; this project's order payload never sent it.
-   **Fix:** `place_market_order()` now sends `"ManualOrder": false` on
-   every order (false because the bot places these algorithmically, not a
-   human in SaxoTraderGO).
-
-**Files touched:** `fx.py`, `instrument_map.py`, `kill_switch.py`,
-`saxo_client.py`, `saxo_live_engine.py`, `.gitignore` (added
-`data/risk_capital.json` as ignorable runtime state, same as
-`data/daily_state.json`).
-
-**If you're picking this project back up:** `data/risk_capital.json` is
-the new source of truth for sizing, separate from whatever Saxo's own
-equity/balance numbers say. If it's ever deleted or looks wrong, it
-resets to `config.STARTING_CAPITAL` on the next run — that's intentional
-recovery behavior, not a bug, but it does mean any accumulated paper
-gains/losses tracked locally get reset too.
-
-## Files in this project
-
-| File | Purpose |
+| Rule | Value |
 |---|---|
-| `config.py` | All settings you might want to change (tickers, risk %, MA periods) |
-| `data_loader.py` | Downloads and caches historical price data (backtest only) |
-| `live_data.py` | Fetches fresh (uncached) price data for the live engine |
-| `strategy.py` | The actual buy/sell rules and position sizing |
-| `backtest.py` | Simulates the strategy day-by-day with full risk management |
-| `main.py` | Run this to execute a backtest |
-| `saxo_auth.py` | One-time PKCE login to Saxo SIM; self-refreshing after that |
-| `saxo_client.py` | All Saxo OpenAPI calls (account, positions, balances, orders) |
-| `instrument_map.py` | Loads the Yahoo-ticker → Saxo-Uic mapping, including each instrument's trading currency |
-| `fx.py` | Converts any instrument/account currency into SEK for sizing and cash checks |
-| `kill_switch.py` | Kill switch, daily loss cap state, and the local risk-capital tracker — shared safety/sizing logic |
-| `saxo_live_engine.py` | Core Phase 2 decision + order-placement logic |
-| `saxo_live_main.py` | Run this once per trading day for live SIM trading |
+| Risk per trade | 1% of risk capital (ATR-based) |
+| Stop loss | Entry − 2.5 × ATR |
+| Max open positions | 10 total (4 US, 2 OMX30, 2 DAX, 2 Commodities, 2 Forex) |
+| Daily loss cap | No new entries if ATOS equity down ≥ 3% today |
+| Kill switch | Create file named `STOP_TRADING` to halt everything |
+| Min signal score | 55/100 — weak signals are never traded |
+
+---
+
+## How to Run
+
+### First time setup (one-time)
+```powershell
+pip install -r requirements.txt
+python saxo_auth.py          # login to Saxo SIM (PKCE OAuth)
+python lookup_instruments.py # build Saxo UIC map for OMX30/DAX stocks
+```
+
+### Daily run (schedule this with Windows Task Scheduler)
+```powershell
+python atos_runner.py
+```
+
+### Schedule it (recommended: run once per day after market close, e.g. 23:00 PKT)
+- Open **Task Scheduler** → Create Basic Task
+- Trigger: Daily at 23:00
+- Action: `python C:\path\to\atos_runner.py`
+- Start in: `C:\path\to\your\project\`
+
+### View dashboard
+After each run, open: **[https://namazic.com/atos/](https://namazic.com/atos/)**
+Or locally: `dashboard/index.html`
+
+---
+
+## Project Structure
+
+```
+algo-platform/
+│
+├── atos/                         ← ATOS core (new)
+│   ├── universe.py               ← 7-market instrument universe
+│   ├── features.py               ← All indicator calculations
+│   ├── detectors.py              ← 5 signal detectors
+│   ├── decision_engine.py        ← Weighted score combiner
+│   ├── learner.py                ← Adaptive weight updater
+│   ├── risk.py                   ← Risk engine + position sizing
+│   ├── database.py               ← SQLite database layer
+│   └── dashboard_gen.py          ← HTML dashboard generator
+│
+├── atos_runner.py                ← Daily entry point (run this)
+│
+├── config/
+│   └── deploy.json               ← FTP credentials (gitignored)
+│
+├── data/
+│   ├── atos.db                   ← SQLite: all trades, weights, equity
+│   └── atos_risk_state.json      ← Daily capital tracker
+│
+├── dashboard/
+│   └── index.html                ← Generated dashboard (uploaded to namazic.com)
+│
+│ ── ORIGINAL FILES (Phase 1 + 2 — unchanged) ───────────────────────
+├── config.py                     ← Original strategy settings
+├── strategy.py                   ← EMA crossover strategy
+├── backtest.py                   ← Backtesting engine
+├── backtest_cfd.py               ← CFD backtesting
+├── saxo_auth.py                  ← Saxo PKCE OAuth (shared)
+├── saxo_client.py                ← Saxo API client (shared)
+├── saxo_live_engine.py           ← Original single-strategy live engine
+├── saxo_live_main.py             ← Original entry point
+├── kill_switch.py                ← Original kill switch
+├── fx.py                         ← FX conversion (shared)
+├── instrument_map.py             ← Saxo UIC mapping (shared)
+├── data_loader.py                ← Historical data (backtest)
+└── live_data.py                  ← Live data fetcher (backtest)
+```
+
+---
+
+## Dashboard (Live at namazic.com/atos)
+
+The HTML dashboard is generated fresh every morning and automatically uploaded to your domain. It shows:
+
+- **Total equity** and today's P&L
+- **Algorithm weights** with progress bars (watch them evolve over time)
+- **Weight evolution chart** — see the learning happen visually
+- **Today's trades** (BUY / EXIT / BLOCKED with reasons)
+- **Open positions** with entry price, stop loss, entry date
+- **90-day equity curve** chart
+
+No server required — it's a self-contained HTML file with all data baked in.
+
+---
+
+## Roadmap
+
+| Phase | Status | Description |
+|---|---|---|
+| **Phase 1** | ✅ Done | EMA crossover backtest on OMX30 |
+| **Phase 2** | ✅ Done | Saxo SIM live paper trading (single strategy) |
+| **ATOS v1** | 🔨 **Now** | Multi-strategy, self-learning, 7 markets, dashboard |
+| **Phase 3** | 🔒 Locked | Live trading — only after 4+ weeks of stable ATOS paper results |
+
+> **Phase 3 rule:** Never switch to live money based on ATOS looking good in the code. Switch only after reading `data/atos.db` trade history critically — consistent positive performance over weeks with realistic fills and no large blocked orders.
+
+---
+
+## Change Log
+
+### Aug 2026 — ATOS v1 launched
+
+**New system built on top of Phase 1/2 infrastructure:**
+
+- `atos/` package: universe (7 markets), features, 5 detectors, decision engine, learner, risk engine, SQLite database, HTML dashboard generator
+- `atos_runner.py`: daily orchestrator replacing single-strategy `saxo_live_engine.py`
+- `config/deploy.json`: FTP credentials for auto-upload to namazic.com/atos
+- `dashboard/index.html`: dark-theme dashboard with Chart.js equity curve + weight evolution
+
+**Markets added vs. Phase 2:** S&P500 top 50, DAX40, Gold (GLD), Silver (SLV), WTI Oil (USO), Gold Miners (GDX), EUR/USD, GBP/USD, USD/JPY
+
+**Files untouched from Phase 1/2:** `saxo_auth.py`, `saxo_client.py`, `kill_switch.py`, `fx.py`, `instrument_map.py`, `strategy.py`, `backtest.py`, `config.py`
+
+---
+
+### Aug 2026 (Phase 2) — Fixed oversized/rejected live BUY orders
+
+*(details preserved below)*
+
+**Symptom:** `saxo_live_engine.py` was placing BUY orders worth millions of SEK that Saxo's SIM API rejected with `400 Bad Request`.
+
+**Root causes fixed:**
+1. Position sizing used live Saxo account equity instead of `config.STARTING_CAPITAL`
+2. No per-instrument currency conversion (EUR/USD prices compared against SEK cash)
+3. Saxo SIM is EUR-denominated; real account is SEK — two separate accounts
+4. Order failures logged without Saxo's actual rejection reason
+5. `ManualOrder` field missing from order payload (Saxo requirement)
+
+**Files touched:** `fx.py`, `instrument_map.py`, `kill_switch.py`, `saxo_client.py`, `saxo_live_engine.py`
+
+---
+
+## Security Notes
+
+- `config/deploy.json` contains FTP credentials — **never commit this file**
+- `saxo_token.json` contains Saxo session tokens — **never commit or share**
+- Both are gitignored. If you ever accidentally commit them, rotate credentials immediately.
+- The trading bot runs locally on your Windows machine only — no credentials leave your machine.
