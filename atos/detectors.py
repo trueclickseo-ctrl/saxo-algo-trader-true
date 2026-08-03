@@ -150,7 +150,16 @@ class Detector4_MeanReversion:
             bb_pct = row["bb_pct"]  # 0=lower band, 1=upper band
             rsi    = row["rsi"]
 
-            # Oversold reversal opportunity
+            # ── Trend context check ────────────────────────────────
+            # If EMA20 > EMA50, the stock is in an uptrend.
+            # Being above the upper Bollinger Band in an uptrend is STRENGTH,
+            # not overbought — it's how trending breakouts behave.
+            # Only penalize overbought in flat/downtrend markets.
+            ema20 = row.get("ema20")
+            ema50 = row.get("ema50")
+            in_uptrend = (pd.notna(ema20) and pd.notna(ema50) and ema20 > ema50)
+
+            # Oversold reversal opportunity (works in both trend directions)
             if bb_pct < 0.05 and rsi < 30:
                 score += 70    # Price at/below lower band AND deeply oversold
             elif bb_pct < 0.15 and rsi < 40:
@@ -158,11 +167,14 @@ class Detector4_MeanReversion:
             elif bb_pct < 0.25 and rsi < 50:
                 score += 20    # Below mid-band with weak momentum
 
-            # Overbought — exit signal
-            elif bb_pct > 0.95 and rsi > 70:
-                score -= 60    # At upper band AND overbought — exit warning
-            elif bb_pct > 0.80 and rsi > 65:
-                score -= 30    # Approaching upper extreme
+            # Overbought warning — ONLY apply in non-trending / downtrend markets
+            elif bb_pct > 0.95 and rsi > 70 and not in_uptrend:
+                score -= 60    # Overbought in flat/down market — exit warning
+            elif bb_pct > 0.80 and rsi > 65 and not in_uptrend:
+                score -= 30    # Approaching upper extreme in flat market
+
+            # In uptrend: being above upper band with high RSI is fine — return 0 (neutral)
+            # The Trend + Breakout detectors already handle this case
 
             # BB width — narrow band = volatility squeeze (breakout coming)
             if pd.notna(row.get("bb_width")) and row["bb_width"] < 0.02:
