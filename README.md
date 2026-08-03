@@ -1,12 +1,12 @@
 # ATOS — Algorithmic Trading Operating System
 ## Agent Handover & Project State Document
-### Last Updated: 2026-08-04 02:34 PKT | Updated by: Agent #3 (SEO session)
+### Last Updated: 2026-08-04 02:53 PKT | Updated by: Agent #4 (Full System Audit)
 
 ---
 
 > ## 🤖 MULTI-AGENT PROTOCOL — READ FIRST
 >
-> **4 Claude agents share this project. Before doing ANYTHING:**
+> **5 Claude agents share this project. Before doing ANYTHING:**
 >
 > 1. `git pull origin main` — get latest code
 > 2. Read this entire README
@@ -38,7 +38,7 @@ Dashboard: http://localhost:8070           ← localhost only (no web hosting)
 
 ---
 
-## 3. Current System State — 2026-08-04 02:34 PKT
+## 3. Current System State — 2026-08-04 02:53 PKT
 
 ### ✅ WORKING RIGHT NOW
 | What | How | Notes |
@@ -47,18 +47,27 @@ Dashboard: http://localhost:8070           ← localhost only (no web hosting)
 | 4 open positions visible | Synced from Saxo SIM | PRX.AS, NIBE-B.ST, HEXA-B.ST, HM-B.ST |
 | Active DB | `data/atos_live.db` | SEO-owned, writable, has 4 trades |
 | All 5 ATOS detectors | `atos/detectors.py` | D4 bug fixed |
-| Risk engine | `atos/risk.py` | 10k SEK capital, 10 max positions |
 | Decision engine | `atos/decision_engine.py` | BUY>=55, EXIT<=20 |
 | Adaptive learner | `atos/learner.py` | Kicks in after 10 closed trades |
+
+### 🔴 CRITICAL — Agent #4 Audit Findings
+| Finding | Severity | Details |
+|---|---|---|
+| **risk.py equity/cash conflation bug** | 🔴 CRITICAL | `risk_capital_sek` tracks cash not equity — daily loss cap false-triggers after 2-3 buys, position sizing shrinks, equity curve wrong |
+| **Engine has NEVER run** | 🔴 CRITICAL | `last_run_date: null` — zero daily cycles executed |
+| **4 positions placed manually** | ⚠️ HIGH | Agent #2 placed them on Saxo SIM directly — no detector scores, no algorithmic basis |
+| **No stop-losses on any position** | ⚠️ HIGH | Engine never ran, so ATR stops were never set |
+| **Decision engine rated 5/10** | ⚠️ MEDIUM | Good foundation but needs regime detection, trailing stops, correlation checks |
 
 ### ⚠️ KNOWN ISSUES — MUST FIX
 | Issue | Cause | Fix |
 |---|---|---|
+| **Bug #5 — risk.py equity/cash conflation** | `record_fill()` subtracts position cost from `risk_capital_sek`, treating it as cash not equity | Separate cash tracking from equity; use portfolio value for sizing & loss cap |
 | `data/atos.db` is read-only for SEO | WAL journal files owned by user `Kashif` (agent #2) | **Run `fix_permissions.bat` as Administrator** — then rename `atos_live.db` → `atos.db` |
 | `data/atos.db-wal` + `data/atos.db-shm` locked | Created by Kashif's server session | Same — admin fix then delete WAL files |
 | Saxo token **EXPIRED** | Last used >24h ago | Run `py -3 saxo_auth_auto.py` before any trading |
 | ATOS universe tickers not mapped to Saxo UICs | `lookup_instruments.py` never run for new tickers | Run `py -3 lookup_instruments.py` |
-| `atos_runner.py` never completed a full cycle | No daily run has happened yet | Fix auth first, then run `py -3 -X utf8 run_atos.py` |
+| `atos_runner.py` never completed a full cycle | No daily run has happened yet | Fix bug #5 + auth first, then run `py -3 -X utf8 run_atos.py` |
 
 ### ✅ WORKAROUND IN PLACE
 `atos_live.db` = fresh database created by agent #3, owned by SEO, contains:
@@ -79,15 +88,18 @@ All code (`atos/database.py`, `atos_server.py`) now points to `atos_live.db`.
 | `HEXA-B.ST` | Hexagon AB | 11 | 96.42 | SEK | -7.92 | OMX30 |
 | `HM-B.ST` | H&M | 12 | 177.20 | SEK | +7.20 | OMX30 |
 
-These were placed by agent #2 directly on Saxo SIM. The ATOS engine did not create them — they were manually triggered. They have no detector scores.
+**Total invested: ~4,673 SEK** (47% of 10,000 SEK capital). **Unrealized P&L: ≈ -8.10 SEK** (-0.081%).
+
+⚠️ These were placed by agent #2 **manually** on Saxo SIM — **NOT by the ATOS decision engine**. They have zero detector scores, zero algorithmic basis, and **no stop-loss orders set**.
 
 ---
 
 ## 5. Windows User Account Situation ⚠️ CRITICAL
 
-Two Windows user accounts on this machine:
+Three Windows user accounts on this machine:
 - **`SEO`** — original project owner. Owns all `atos/` files and `atos_runner.py`.
 - **`Kashif`** — agent #2's session. Owns `atos_dashboard.py`, `run_atos.py`, `saxo_auth_auto.py`, `fix_permissions.bat`, and the WAL journal files.
+- **`Kwaseem`** — agent #4's session. Can read all files but cannot modify SEO-owned files without admin permission fix.
 
 **Files created by you (the agent) are owned by whichever user ran the terminal.**
 
@@ -95,9 +107,9 @@ Two Windows user accounts on this machine:
 ```
 Right-click fix_permissions.bat → Run as Administrator
 ```
-This grants both users full access to all files. Do this before editing anything owned by the other user.
+This grants all users full access to all files. Do this before editing anything owned by another user.
 
-**Until fixed:** Create new files rather than editing files owned by the other user.
+**Until fixed:** Create new files rather than editing files owned by another user.
 
 ---
 
@@ -157,7 +169,7 @@ git push origin main
 | `atos/detectors.py` | D1-D5 signal detectors, score -100 to +100 each |
 | `atos/decision_engine.py` | Combines detector scores → BUY/EXIT/HOLD |
 | `atos/learner.py` | Updates detector weights after closed trades |
-| `atos/risk.py` | All risk gates + ATR-based position sizing |
+| `atos/risk.py` | All risk gates + ATR-based position sizing ⚠️ **HAS BUG #5** |
 | `atos/database.py` | SQLite CRUD — now points to `data/atos_live.db` |
 | `atos/dashboard_gen.py` | Legacy static HTML generator (not used with server) |
 | `atos_runner.py` | Main daily orchestrator — `run_cycle()` |
@@ -184,7 +196,7 @@ git push origin main
 | `create_fresh_db.py` | Create fresh `atos_live.db` from scratch + import positions |
 | `lookup_instruments.py` | Map ATOS universe tickers to Saxo UICs |
 | `test_atos_signal.py` | Test detector scores without placing orders |
-| `fix_permissions.bat` | **Admin only** — fix file ownership for both users |
+| `fix_permissions.bat` | **Admin only** — fix file ownership for all users |
 
 ### Data Files
 | File | Purpose |
@@ -213,6 +225,30 @@ Weights: start all 1.0, learn after 10+ closed trades
 Bounds: 0.30 min, 2.50 max
 ```
 
+### Score Combination Formula
+```
+combined_score = sum(detector_score[i] × weight[i]) / sum(weight[i])
+```
+Weighted average, clamped to [-100, +100].
+
+### Agent #4 Audit — Engine Rating: 5/10
+| Aspect | Rating | Notes |
+|---|---|---|
+| Architecture | 8/10 | Solid multi-detector weighted scoring design |
+| Intelligence | 5/10 | Basic step-function signals, no ML, hardcoded thresholds |
+| Risk Management | 7/10 | Good gates (except Bug #5) — ATR sizing, market limits, kill switch |
+| Self-Learning | 4/10 | Too simplistic — fixed ±0.05 step, ignores trade magnitude |
+| Execution | 1/10 | **Has never run a single daily cycle** |
+
+### Missing for "Super Smart" Status
+- Regime detection (bull/bear/sideways market classifier)
+- Trailing stop losses
+- Position correlation / sector concentration checks
+- Magnitude-aware learner
+- VWAP integration
+- Intraday signals
+- Short selling logic
+
 ---
 
 ## 9. Risk Rules (Hard-Coded)
@@ -239,7 +275,7 @@ Risk capital now anchored to `STARTING_CAPITAL_SEK = 10_000` in `atos/risk.py`.
 ### Bug #3 — Windows Unicode errors ✅ FIXED
 Always use `py -3 -X utf8 script.py`.
 
-### Bug #4 — Dashboard shows all "---" values ✅ FIXED (this session)
+### Bug #4 — Dashboard shows all "---" values ✅ FIXED (agent #3)
 **Root cause chain:**
 1. `atos_dashboard.py` used single-threaded `HTTPServer` — browser's `Promise.all()` fires 6 parallel API calls, all but one were dropped.
 2. Two server instances running simultaneously (started by SEO and Kashif sessions) fighting on port 8070.
@@ -247,6 +283,17 @@ Always use `py -3 -X utf8 script.py`.
 4. DB was empty anyway (no daily cycle had run).
 
 **Fix:** `atos_server.py` uses `ThreadingHTTPServer` + `SO_REUSEADDR`. Created `atos_live.db` as SEO-owned writable DB. Seeded with 10,000 SEK starting equity + 4 open positions from Saxo SIM.
+
+### Bug #5 — risk.py equity/cash conflation 🔴 OPEN (found by Agent #4 audit)
+**Root cause:** `risk_capital_sek` is used as both "available cash" and "total equity".
+- `record_fill(-cost_sek)` subtracts full position cost from `risk_capital_sek`
+- `calculate_position_size()` uses this same variable → position sizing shrinks after each buy
+- `daily_loss_cap_breached()` compares `day_start_equity` vs `risk_capital_sek` → **false-triggers** the 3% circuit breaker after buying 2-3 positions (buying = cash drops = looks like a loss)
+- `atos_runner.py` logs `total_equity = get_risk_capital()` → equity curve ignores open position values
+
+**Impact:** If the engine runs, it would buy 2-3 positions then block all further trading for the day. Equity chart would show phantom losses.
+
+**Required fix:** Separate cash tracking from portfolio equity. Use `cash + sum(open_position_values)` for equity, sizing, and loss cap calculations.
 
 ---
 
@@ -276,13 +323,20 @@ Redirect URI: `https://localhost/redirect` (already registered).
 
 > **Work these in order. Mark done ✅ and push README before ending session.**
 
+- [ ] **P0 — FIX BUG #5: risk.py equity/cash conflation** 🔴 BLOCKER
+  Must fix before running first cycle. See §10 Bug #5 for details.
+  In `atos/risk.py`:
+  - Separate `available_cash` from `total_equity`
+  - Position sizing should use `total_equity` (cash + open positions value)
+  - Daily loss cap should compare equity snapshots, not cash
+  - `atos_runner.py` equity logging should include open position values
+
 - [ ] **P1 — Fix permissions** (ADMIN needed)
   ```
   Right-click fix_permissions.bat → Run as Administrator
   ```
   Then in PowerShell:
   ```powershell
-  # Merge atos_live.db data back into atos.db, or just rename:
   Copy-Item data\atos_live.db data\atos_new.db
   Remove-Item data\atos.db, data\atos.db-wal, data\atos.db-shm
   Rename-Item data\atos_new.db data\atos.db
@@ -312,6 +366,14 @@ Redirect URI: `https://localhost/redirect` (already registered).
 
 - [ ] **P6 — Set up Task Scheduler** (ADMIN needed)
   See §13 below. Runs cycle automatically every day at 23:00.
+
+- [ ] **P7 — Upgrade Decision Engine to "Super Smart"** (ATOS v2 roadmap)
+  Agent #4 audit rated the engine 5/10. Key upgrades needed:
+  - Regime detection (bull/bear/sideways classifier)
+  - Trailing stop losses (not just static ATR stops)
+  - Position correlation / sector concentration checks
+  - Magnitude-aware learner (weight adjustments proportional to P&L size)
+  - VWAP integration in D2 Momentum detector
 
 ---
 
@@ -354,7 +416,7 @@ Detector overrides:
 ```
 OS:       Windows 11 (Lenovo ThinkPad)
 Python:   3.14 (py -3 or python both work; always add -X utf8)
-Users:    SEO (original), Kashif (agent #2 session)
+Users:    SEO (original), Kashif (agent #2), Kwaseem (agent #4)
 Git:      Configured, pushing to GitHub
 Terminal: Use PowerShell
 ```
@@ -383,8 +445,9 @@ ac35a61  Add read-only strategy dashboard
 | Agent #1 | 2026-08-03 | SEO | Built ATOS v1: universe, features, 5 detectors, decision engine, learner, risk engine, DB, runner, README |
 | Agent #2 | 2026-08-03/04 | Kashif | Added local dashboard server, auto-OAuth, run_atos.py wrapper, placed 4 test orders on Saxo SIM, fixed JS bugs |
 | Agent #3 | 2026-08-04 | SEO | Fixed dashboard showing "---": diagnosed dual-server conflict, Kashif WAL lock; created `atos_server.py` (ThreadingHTTPServer), `atos_live.db` (fresh writable DB), synced 4 Saxo positions, multi-agent README protocol |
+| Agent #4 | 2026-08-04 | Kwaseem | **Full system audit**: Confirmed 4 positions are manual (not algorithmic), engine never ran (`last_run_date: null`), found critical Bug #5 (risk.py equity/cash conflation), rated decision engine 5/10, documented all algorithms & scoring logic, identified 11 improvement gaps, created comprehensive audit report |
 
-**Next agent: You are Agent #4. Read §12 for your task list.**
+**Next agent: You are Agent #5. Read §12 for your task list. P0 (Bug #5 fix) is BLOCKING — must fix before first daily cycle.**
 
 ---
 
@@ -394,6 +457,6 @@ ac35a61  Add read-only strategy dashboard
 |---|---|---|
 | Phase 1 | ✅ Done | EMA crossover backtest |
 | Phase 2 | ✅ Done | Saxo SIM single-strategy live trading |
-| **ATOS v1** | ✅ Running | Multi-market self-learning system, localhost dashboard, 4 open positions |
-| ATOS v2 | 🔒 Future | VWAP in D2, regime detection, bonds, sector ETFs |
+| **ATOS v1** | ⚠️ Code ready, never executed | Multi-market self-learning system, localhost dashboard, 4 manual positions. Bug #5 blocks first run. |
+| ATOS v2 | 🔒 Future | VWAP in D2, regime detection, trailing stops, correlation checks, magnitude-aware learner |
 | Phase 3 | 🔒 **Locked** | Live money — only after 40+ closed trades, win rate >50%, PF >1.5 |
