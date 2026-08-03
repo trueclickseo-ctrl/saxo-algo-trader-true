@@ -460,3 +460,32 @@ ac35a61  Add read-only strategy dashboard
 | **ATOS v1** | âš ï¸ Code ready, never executed | Multi-market self-learning system, localhost dashboard, 4 manual positions. Bug #5 blocks first run. |
 | ATOS v2 | ðŸ”’ Future | VWAP in D2, regime detection, trailing stops, correlation checks, magnitude-aware learner |
 | Phase 3 | ðŸ”’ **Locked** | Live money â€” only after 40+ closed trades, win rate >50%, PF >1.5 |
+
+---
+
+## 19. Agent #4 Additional Audit Findings (2026-08-04 03:03 PKT)
+
+### Order History Analysis
+The 4 open positions were **NOT** placed manually through the Saxo UI. They were placed via the **legacy SMA crossover strategy** in `saxo_client.py`. The `live_order_log.csv` shows:
+- **8 failed attempts** before 4 successful fills
+- First attempts tried insane sizes (14,469 shares of H&M!) due to Bug #2 (€100k Saxo balance)
+- All 4 orders filled in a 5-second window at 16:43 on 2026-08-03
+- Buy reason logged as `SMA crossover signal` — NOT the ATOS 5-detector engine
+
+### Critical State File Discrepancies Found
+| File | Current Value | Should Be | Risk |
+|---|---|---|---|
+| `data/daily_state.json` | `day_start_equity: 1,000,000.0` | 10,000 | Position sizing would be 100× too large if engine uses this |
+| `data/risk_capital.json` | `risk_capital: 5,347.04` | ~10,000 minus position costs | Confirms Bug #5 — capital already reduced by position costs |
+
+### Learner Crash Risk (Bug #6)
+The 4 imported positions have NULL detector scores in the database. When these trades close, `learner.py` will attempt to iterate over NULL scores and crash with a TypeError.
+**Fix:** Add NULL-check guard in `learner.py` before weight adjustment loop.
+
+### Actual Fill Prices (from `live_order_log.csv`)
+| Ticker | README Price | Actual Fill | Difference |
+|---|---|---|---|
+| HM-B.ST | 177.20 | 177.40 | +0.20 |
+| HEXA-B.ST | 96.42 | 96.36 | -0.06 |
+| NIBE-B.ST | 38.92 | 38.85 | -0.07 |
+| PRX.AS | 41.24 | 41.31 | +0.07 |
