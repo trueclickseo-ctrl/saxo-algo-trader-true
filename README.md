@@ -170,6 +170,15 @@ Saxo's SIM API rejected with `400 Client Error: Bad Request`.
    error, so `results/live_order_log.csv`'s `order_response` column shows
    the actual reason for any future failure.
 
+5. **Found via fix #4, same day:** once sizing was fixed and orders were
+   reasonably sized again, they still failed — but now with a real reason:
+   `"The current platform requires ManualOrder to be specified as true or
+   false on all orders."` Saxo added this as a required order field at
+   some point; this project's order payload never sent it.
+   **Fix:** `place_market_order()` now sends `"ManualOrder": false` on
+   every order (false because the bot places these algorithmically, not a
+   human in SaxoTraderGO).
+
 **Files touched:** `fx.py`, `instrument_map.py`, `kill_switch.py`,
 `saxo_client.py`, `saxo_live_engine.py`, `.gitignore` (added
 `data/risk_capital.json` as ignorable runtime state, same as

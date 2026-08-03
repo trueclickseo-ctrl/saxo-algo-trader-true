@@ -141,6 +141,11 @@ def place_market_order(uic: int, asset_type: str, buy_sell: str, amount: int) ->
         "Amount": amount,
         "OrderType": "Market",
         "OrderDuration": {"DurationType": "DayOrder"},
+        # Saxo now requires this on every order. False because this bot
+        # places orders algorithmically, not a human clicking buy/sell in
+        # SaxoTraderGO — matters for Saxo's own compliance/reporting, not
+        # anything this bot needs to reason about.
+        "ManualOrder": False,
     }
     resp = requests.post(f"{SIM_BASE_URL}/trade/v2/orders", headers=_headers(), json=order)
     try:
