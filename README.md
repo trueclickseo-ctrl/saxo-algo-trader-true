@@ -116,6 +116,72 @@ real order execution the backtest couldn't see (slippage, rejected orders,
 liquidity)? Going live should stay a deliberate, separate decision — not
 a natural continuation of this file.
 
+## Change log
+
+### Aug 2026 — fixed oversized/rejected live BUY orders
+
+**Symptom:** `saxo_live_engine.py` was placing BUY orders for thousands of
+shares (hundreds of thousands to millions of SEK notional per order) that
+Saxo's SIM API rejected with `400 Client Error: Bad Request`.
+
+**Root causes found and fixed:**
+
+1. **Position sizing used live Saxo account equity, not
+   `config.STARTING_CAPITAL`.** `backtest.py` sizes every trade off the
+   10,000 SEK `STARTING_CAPITAL` — the number Phase 1 actually validated.
+   `saxo_live_engine.py` was instead pulling live equity from
+   `balances["TotalValue"]`. Saxo's SIM/demo account here is funded far
+   above 10,000 SEK (it's a separate practice account from the user's real
+   live account — see point 3), so 1% risk of that inflated balance
+   produced wildly oversized orders.
+   **Fix:** added a local risk-capital tracker
+   (`kill_switch.get_risk_capital()` / `record_fill()`, persisted to
+   `data/risk_capital.json`) that starts at `config.STARTING_CAPITAL` and
+   moves exactly like `backtest.py`'s `self.capital` — down by cost on a
+   filled buy, up by proceeds on a filled sell. Live Saxo equity/cash are
+   still used as a hard affordability backstop, just not as the sizing
+   basis.
+
+2. **No per-instrument currency conversion.** `fx.py` originally only
+   converted the *account's* currency into SEK. But `config.ACTIVE_UNIVERSE`
+   has grown well past OMX30 to include Nasdaq-100 (USD), Germany/France/
+   Netherlands (EUR), UK (GBP), Switzerland (CHF), Canada (CAD), and Japan
+   (JPY) — none of those instrument prices were being converted, so sizing
+   and cash checks silently compared, e.g., a raw EUR price for `PRX.AS`
+   against SEK cash as if they were the same currency.
+   **Fix:** `fx.py` now has a generic `get_rate_to_sek(currency)`;
+   `instrument_map.py` now surfaces each ticker's `currency` (from
+   `data/instrument_map.csv`, already populated by `lookup_instruments.py`
+   but previously unused); `saxo_live_engine.py` converts each instrument's
+   entry/stop price into SEK before sizing or checking cash.
+
+3. **The Saxo SIM/demo account is EUR-denominated; the user's real, live
+   Saxo account is SEK.** These are two separate accounts with
+   independently assigned base currencies — this is expected Saxo
+   behavior, not a bug. The fx handling above already accounts for it
+   generically (works for whatever currency the SIM account reports, not
+   hardcoded to EUR or SEK).
+
+4. **Order failures were logged without Saxo's actual rejection reason.**
+   `saxo_client.place_market_order()` let `requests` raise its generic
+   `"400 Client Error: Bad Request for url: ..."` message, which drops the
+   response body — exactly where Saxo puts the real reason.
+   **Fix:** the response body is now captured and appended to the raised
+   error, so `results/live_order_log.csv`'s `order_response` column shows
+   the actual reason for any future failure.
+
+**Files touched:** `fx.py`, `instrument_map.py`, `kill_switch.py`,
+`saxo_client.py`, `saxo_live_engine.py`, `.gitignore` (added
+`data/risk_capital.json` as ignorable runtime state, same as
+`data/daily_state.json`).
+
+**If you're picking this project back up:** `data/risk_capital.json` is
+the new source of truth for sizing, separate from whatever Saxo's own
+equity/balance numbers say. If it's ever deleted or looks wrong, it
+resets to `config.STARTING_CAPITAL` on the next run — that's intentional
+recovery behavior, not a bug, but it does mean any accumulated paper
+gains/losses tracked locally get reset too.
+
 ## Files in this project
 
 | File | Purpose |
@@ -128,7 +194,8 @@ a natural continuation of this file.
 | `main.py` | Run this to execute a backtest |
 | `saxo_auth.py` | One-time PKCE login to Saxo SIM; self-refreshing after that |
 | `saxo_client.py` | All Saxo OpenAPI calls (account, positions, balances, orders) |
-| `instrument_map.py` | Loads the Yahoo-ticker → Saxo-Uic mapping |
-| `kill_switch.py` | Kill switch + daily loss cap state, shared safety logic |
+| `instrument_map.py` | Loads the Yahoo-ticker → Saxo-Uic mapping, including each instrument's trading currency |
+| `fx.py` | Converts any instrument/account currency into SEK for sizing and cash checks |
+| `kill_switch.py` | Kill switch, daily loss cap state, and the local risk-capital tracker — shared safety/sizing logic |
 | `saxo_live_engine.py` | Core Phase 2 decision + order-placement logic |
 | `saxo_live_main.py` | Run this once per trading day for live SIM trading |
