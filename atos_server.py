@@ -21,7 +21,8 @@ from urllib.parse import urlparse
 from datetime import datetime, date
 
 DB_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
-DB_PATH = os.path.join(DB_DIR, 'atos.db')
+# atos_live.db = SEO-owned, writable. atos.db has Kashif-owned WAL lock (use fix_permissions.bat to fix)
+DB_PATH = os.path.join(DB_DIR, 'atos_live.db')
 PORT    = 8070
 
 # ─── Database ────────────────────────────────────────────────────────────────

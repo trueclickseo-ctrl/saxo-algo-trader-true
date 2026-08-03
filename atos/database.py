@@ -16,7 +16,8 @@ import sqlite3
 import os
 from datetime import datetime, date
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "atos.db")
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "atos_live.db")
+
 
 
 def _conn() -> sqlite3.Connection:

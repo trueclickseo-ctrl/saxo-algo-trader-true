@@ -28,7 +28,7 @@ from strategy import add_indicators
 from live_data import get_latest_universe_data
 from instrument_map import load_instrument_map
 from kill_switch import kill_switch_active, get_day_start_equity, daily_loss_cap_breached
-from fx import get_eur_sek_rate
+from fx import get_rate_to_sek
 
 OUTPUT_FILE = os.path.join(os.path.dirname(__file__), "results", "dashboard.html")
 LOG_FILE = os.path.join(os.path.dirname(__file__), "results", "live_order_log.csv")
@@ -64,7 +64,7 @@ def build_dashboard():
     cash = balances["CashBalance"]
     currency = balances.get("Currency", "EUR")
 
-    fx_rate = 1.0 if currency == "SEK" else get_eur_sek_rate()
+    fx_rate = 1.0 if currency == "SEK" else get_rate_to_sek(currency)
     day_start_equity = get_day_start_equity(equity)
     daily_pnl_pct = (equity - day_start_equity) / day_start_equity * 100 if day_start_equity else 0
 
