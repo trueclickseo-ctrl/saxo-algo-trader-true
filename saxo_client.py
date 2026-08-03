@@ -143,7 +143,15 @@ def place_market_order(uic: int, asset_type: str, buy_sell: str, amount: int) ->
         "OrderDuration": {"DurationType": "DayOrder"},
     }
     resp = requests.post(f"{SIM_BASE_URL}/trade/v2/orders", headers=_headers(), json=order)
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        # requests' default message ("400 Client Error: Bad Request for
+        # url: ...") drops the response body, which is exactly where Saxo
+        # puts the actual rejection reason. Without this, live_order_log.csv
+        # tells you an order failed but never why.
+        body = resp.text.strip()
+        raise requests.exceptions.HTTPError(f"{e} | Saxo response body: {body}", response=resp) from e
     return resp.json()
 
 

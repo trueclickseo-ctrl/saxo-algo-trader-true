@@ -44,8 +44,11 @@ from strategy import add_indicators, position_size
 from live_data import get_latest_universe_data
 from instrument_map import load_instrument_map
 import saxo_client
-from kill_switch import kill_switch_active, get_day_start_equity, daily_loss_cap_breached
-from fx import get_eur_sek_rate
+from kill_switch import (
+    kill_switch_active, get_day_start_equity, daily_loss_cap_breached,
+    get_risk_capital, record_fill,
+)
+import fx
 
 LOG_FILE = os.path.join(os.path.dirname(__file__), "results", "live_order_log.csv")
 LOG_FIELDS = ["timestamp", "ticker", "action", "price", "amount", "reason", "order_response"]
@@ -97,26 +100,27 @@ def run_cycle():
     print(f"Account equity: {current_equity:,.2f} {account_currency}  |  "
           f"Cash available: {cash_available:,.2f} {account_currency}")
 
-    # OMX30 instruments trade in SEK (see data/instrument_map.csv). If the
-    # account itself is in a different currency, position sizing and cash
-    # checks must compare like-for-like — convert account figures into SEK
-    # before using them for sizing. (This assumes a SEK-denominated
-    # universe; if config.ACTIVE_UNIVERSE ever trades in a different
-    # currency, this conversion needs to change accordingly.)
-    if account_currency == "SEK":
-        fx_rate = 1.0
-    elif account_currency == "EUR":
-        fx_rate = get_eur_sek_rate()
-        print(f"  EUR/SEK rate: {fx_rate:.4f} (converting account figures to SEK for sizing)")
-    else:
-        raise RuntimeError(
-            f"Account currency is {account_currency}, but only SEK and EUR are "
-            f"handled by the fx conversion in this file. Add a conversion for "
-            f"{account_currency}/SEK in fx.py before running live."
-        )
+    # Convert account-currency cash into SEK (only used for the hard
+    # affordability backstop below — see note on risk_capital_sek).
+    account_fx_rate = fx.get_rate_to_sek(account_currency)
+    if account_currency != "SEK":
+        print(f"  {account_currency}/SEK rate: {account_fx_rate:.4f} "
+              f"(converting account cash to SEK)")
+    cash_available_sek = cash_available * account_fx_rate
 
-    equity_sek = current_equity * fx_rate
-    cash_available_sek = cash_available * fx_rate
+    # IMPORTANT: position sizing does NOT use live Saxo equity. Saxo
+    # SIM/demo accounts are typically funded far above config.STARTING_CAPITAL,
+    # and sizing 1% risk off that inflated balance is what produced orders
+    # worth millions of SEK that Saxo's API rejected. risk_capital_sek is a
+    # local tracker that starts at config.STARTING_CAPITAL and compounds
+    # only from this bot's own fills (see kill_switch.record_fill) — the
+    # same capital basis the backtest was actually validated against.
+    # cash_available_sek (above) still acts as a hard real-money backstop
+    # so this bot never tries to spend more than Saxo will actually let it.
+    risk_capital_sek = get_risk_capital()
+    print(f"  Risk-capital basis for sizing: {risk_capital_sek:,.2f} SEK "
+          f"(separate from live account equity of "
+          f"{current_equity * account_fx_rate:,.2f} SEK)")
 
     day_start_equity = get_day_start_equity(current_equity)
     if daily_loss_cap_breached(day_start_equity, current_equity, config.MAX_DAILY_LOSS_PCT):
@@ -162,6 +166,13 @@ def run_cycle():
                     uic=uic, asset_type="Stock", buy_sell="Sell", amount=held["amount"]
                 )
                 _log(ticker, "SELL", last_row["Close"], held["amount"], reason, str(resp))
+                # Return this sale's SEK proceeds to the local risk-capital
+                # pool (mirrors backtest.py's self.capital += proceeds) so
+                # sizing compounds off this bot's own results, not live
+                # Saxo equity.
+                rate = fx.get_rate_to_sek(info["currency"])
+                proceeds_sek = held["amount"] * last_row["Close"] * rate
+                record_fill(proceeds_sek)
             except Exception as e:
                 print(f"    ORDER FAILED: {e}")
                 _log(ticker, "SELL-FAILED", last_row["Close"], held["amount"], reason, str(e))
@@ -185,29 +196,44 @@ def run_cycle():
             if not last_row.get("cross_up", False) or pd.isna(last_row.get("atr")):
                 continue
 
-            entry_price = last_row["Close"]
+            entry_price = last_row["Close"]  # instrument's own currency
             stop_price = entry_price - config.ATR_STOP_MULTIPLE * last_row["atr"]
-            amount = position_size(equity_sek, entry_price, stop_price)
-            cost_estimate = amount * entry_price
+
+            # Convert this instrument's price into SEK before sizing —
+            # entry_price/stop_price are in whatever currency the
+            # instrument itself trades in (data/instrument_map.csv), which
+            # is NOT necessarily SEK once you're outside OMX30.
+            rate = fx.get_rate_to_sek(info["currency"])
+            entry_price_sek = entry_price * rate
+            stop_price_sek = stop_price * rate
+
+            amount = position_size(risk_capital_sek, entry_price_sek, stop_price_sek)
+            cost_estimate_sek = amount * entry_price_sek
 
             if amount < 1:
                 continue
-            if cost_estimate > cash_available_sek:
-                print(f"  BUY-BLOCKED: {ticker} would cost ~{cost_estimate:.0f} SEK > "
+            if cost_estimate_sek > cash_available_sek:
+                print(f"  BUY-BLOCKED: {ticker} would cost ~{cost_estimate_sek:.0f} SEK > "
                       f"cash available {cash_available_sek:.0f} SEK")
                 _log(ticker, "BUY-BLOCKED", entry_price, amount,
-                     f"Insufficient cash: needs ~{cost_estimate:.0f} SEK, have {cash_available_sek:.0f} SEK")
+                     f"Insufficient cash: needs ~{cost_estimate_sek:.0f} SEK, have {cash_available_sek:.0f} SEK")
                 continue
 
             print(f"  ENTRY signal: {ticker} — buying {amount} units @ ~{entry_price:.2f} "
-                  f"(stop at {stop_price:.2f})")
+                  f"{info['currency']} (stop at {stop_price:.2f}, "
+                  f"~{cost_estimate_sek:.0f} SEK)")
             try:
                 resp = saxo_client.place_market_order(
                     uic=uic, asset_type="Stock", buy_sell="Buy", amount=amount
                 )
                 _log(ticker, "BUY", entry_price, amount, "SMA crossover signal", str(resp))
                 open_count += 1
-                cash_available_sek -= cost_estimate
+                cash_available_sek -= cost_estimate_sek
+                # Take this purchase's SEK cost out of the local
+                # risk-capital pool (mirrors backtest.py's
+                # self.capital -= cost) so sizing on the NEXT ticker in
+                # this same cycle reflects capital actually still free.
+                risk_capital_sek = record_fill(-cost_estimate_sek)
             except Exception as e:
                 print(f"    ORDER FAILED: {e}")
                 _log(ticker, "BUY-FAILED", entry_price, amount, "SMA crossover signal", str(e))

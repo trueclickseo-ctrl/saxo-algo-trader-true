@@ -15,6 +15,7 @@ data/*.csv
 
 # Runtime state — regenerates automatically, not meaningful history
 data/daily_state.json
+data/risk_capital.json
 results/
 STOP_TRADING
 
