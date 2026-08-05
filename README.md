@@ -1,6 +1,6 @@
 # ATOS — Algorithmic Trading Operating System
 ## Agent Handover & Project State Document
-### Last Updated: 2026-08-05 18:17 PKT | Updated by: Agent #4 (Kwaseem session)
+### Last Updated: 2026-08-05 18:35 PKT | Updated by: Agent #4 (Kwaseem session)
 
 ---
 
@@ -46,7 +46,7 @@ Dashboard:  http://localhost:8070                     ← localhost only (no web
 
 ---
 
-## 3. Current System State — 2026-08-05 18:17 PKT
+## 3. Current System State — 2026-08-05 18:35 PKT
 
 ### ✅ WORKING RIGHT NOW
 | What | How | Notes |
@@ -57,10 +57,9 @@ Dashboard:  http://localhost:8070                     ← localhost only (no web
 | **Magnitude-aware learner** | `atos/learner.py` | Decay-weighted, learns from 8 detectors after 5 closed trades |
 | **Fixed equity tracking** | `atos/risk.py` | Cash + open positions = true equity (Bug #5 FIXED) |
 | **DB schema v2** | `atos/database.py` | 12 new columns for D6-D8, regime, trailing stops |
-| Dashboard live | `py -3 -X utf8 atos_server.py` | http://localhost:8070 |
+| **Dashboard v2** | `py -3 -X utf8 atos_server.py` | http://localhost:8070 — shows all 8 detectors, regime badges, color-coded weights |
 | 4 open positions | Synced from Saxo SIM | PRX.AS, NIBE-B.ST, HEXA-B.ST, HM-B.ST |
 | Active DB | `data/atos_live.db` | v2 schema migrated, 8-detector weights |
-| Risk engine | `atos/risk.py` | 10k SEK capital, 10 max positions |
 
 ### ⚠️ KNOWN ISSUES — MUST FIX BEFORE FIRST CYCLE
 | Issue | Cause | Fix |
@@ -161,12 +160,12 @@ git push origin main
 | `atos_runner.py` | Main daily orchestrator — `run_cycle()` | **+trailing stop checks, +8-detector logging, +regime display** |
 
 ### Dashboard & Server
-| File | Purpose |
-|---|---|
-| `atos_server.py` | **USE THIS** — ThreadingHTTPServer @ http://localhost:8070 |
-| `atos_dashboard.py` | Old server (buggy — do not use) |
-| `run_atos.py` | Wrapper: token check + atos_runner + skip FTP |
-| `atos/dashboard_gen.py` | Legacy static HTML generator |
+| File | Purpose | v2 Changes |
+|---|---|---|
+| `atos_server.py` | **USE THIS** — ThreadingHTTPServer @ http://localhost:8070 | **+8 detector pills (D1-D8), +regime badges (BULL/BEAR/SIDEWAYS), +color-coded weight bars, +regime column in all tables** |
+| `atos_dashboard.py` | Old server (buggy — do not use) | — |
+| `run_atos.py` | Wrapper: token check + atos_runner + skip FTP | — |
+| `atos/dashboard_gen.py` | Legacy static HTML generator | — |
 
 ### Auth & Connectivity
 | File | Purpose |
@@ -364,6 +363,8 @@ Terminal: Use PowerShell
 ## 16. Git Commit History
 
 ```
+61512f2  agent#4: dashboard upgraded to v2 — 8 detectors, regime badges, color-coded weights
+138bcd1  agent#4: comprehensive README rewrite — full v2 architecture docs
 2008ca6  agent#4: ATOS v2 — MAJOR UPGRADE — 8 detectors, regime, adaptive thresholds, trailing stops, smart learner, Bug #5/#6 fixed
 7414c2a  agent#4: additional audit findings — SMA crossover origin, state discrepancies, Bug #6
 a4041e4  agent#4: full system audit — Bug #5 found, engine rated 5/10, P0 blocker documented
@@ -387,7 +388,7 @@ ac35a61  Add read-only strategy dashboard
 | Agent #1 | 2026-08-03 | SEO | Built ATOS v1: universe, features, 5 detectors, decision engine, learner, risk engine, DB, runner, README |
 | Agent #2 | 2026-08-03/04 | Kashif | Added local dashboard server, auto-OAuth, run_atos.py wrapper, placed 4 test orders on Saxo SIM via SMA crossover, fixed JS bugs |
 | Agent #3 | 2026-08-04 | SEO | Fixed dashboard "---" bug: ThreadingHTTPServer, fresh `atos_live.db`, synced 4 Saxo positions, multi-agent README protocol |
-| Agent #4 | 2026-08-04/05 | Kwaseem | **ATOS v2 MAJOR UPGRADE**: Full system audit → found Bugs #5/#6/#7 → 4-agent parallel implementation → 8 detectors (D6 SmartMoney, D7 MomQuality, D8 Regime), regime-aware adaptive thresholds, trailing stop losses, magnitude-aware learner, DB schema migration, fixed equity tracking, state file corrections. 506 insertions, 247 deletions across 13 files. All tested and pushed. |
+| Agent #4 | 2026-08-04/05 | Kwaseem | **ATOS v2 MAJOR UPGRADE**: Full system audit → found Bugs #5/#6/#7 → 4-agent parallel implementation → 8 detectors (D6 SmartMoney, D7 MomQuality, D8 Regime), regime-aware adaptive thresholds, trailing stop losses, magnitude-aware learner, DB schema migration, fixed equity tracking, state file corrections, **dashboard upgraded to v2** (8 detector pills, regime badges, color-coded weight bars). 529 insertions, 265 deletions across 14 files. All tested and pushed. |
 
 **Next agent: You are Agent #5. Read §12 for your task list. The engine is ready — you need to authenticate with Saxo and run the first cycle.**
 
@@ -400,7 +401,7 @@ ac35a61  Add read-only strategy dashboard
 | Phase 1 | ✅ Done | EMA crossover backtest |
 | Phase 2 | ✅ Done | Saxo SIM single-strategy live trading |
 | **ATOS v1** | ✅ Done | Multi-market self-learning system, localhost dashboard, 4 open positions |
-| **ATOS v2** | ✅ Code Complete | 8 adaptive detectors, regime detection, trailing stops, smart learner, Bug #5/#6/#7 fixed. **Awaiting first daily cycle.** |
+| **ATOS v2** | ✅ **100% Complete** | 8 adaptive detectors, regime detection, trailing stops, smart learner, v2 dashboard, Bug #5/#6/#7 fixed. **Awaiting first daily cycle.** |
 | Phase 3 | 🔒 **Locked** | Live money — only after 40+ closed trades, win rate >50%, PF >1.5 |
 
 ---
@@ -410,13 +411,14 @@ ac35a61  Add read-only strategy dashboard
 All tests passed during implementation:
 
 ```
-Syntax Validation:  7/7 Python files OK
+Syntax Validation:  8/8 Python files OK (including atos_server.py)
 Import Test:        6/6 modules import cleanly
 Full Pipeline Test: Features → 8 Detectors → Decision → Risk → All pass
 DB Migration:       12 new columns added, 8 weights initialized
 Risk Engine:        Equity = cash + positions (Bug #5 confirmed fixed)
 Learner:            NULL scores handled gracefully (Bug #6 confirmed fixed)
 State Files:        All corrected to 10,000 SEK
+Dashboard:          v2 upgraded — 8 detector pills, regime badges, 8 weight bars
 ```
 
 Sample detector output on synthetic data:
@@ -426,4 +428,13 @@ D2 Momentum:     +25.0    D6 SmartMoney:  +15.0
 D3 Breakout:      +0.0    D7 MomQuality:  +20.0
 D4 MeanRevert:    +0.0    D8 Regime:       +0.0
 Combined Score: 15.0 → HOLD (regime: TRANSITION, threshold: 55)
+```
+
+Dashboard v2 features:
+```
+✅ 8 colored detector score pills (T, M, B, MR, V, SM, MQ, R) with tooltips
+✅ Regime badges: 🟢 BULL | 🔴 BEAR | 🟡 SIDEWAYS | 🟣 TRANSITION
+✅ 8 color-coded weight progress bars (unique color per detector)
+✅ Regime column in Signals, Open Positions, and Trade History tables
+✅ Footer: "ATOS v2 · 8 Adaptive Detectors · Saxo SIM"
 ```
