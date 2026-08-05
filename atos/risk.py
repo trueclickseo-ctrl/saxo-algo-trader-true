@@ -1,11 +1,11 @@
 """
 atos/risk.py
 -------------
-Risk Engine — the last gate every trade must pass before an order is placed.
+Risk Engine -- the last gate every trade must pass before an order is placed.
 
-Rules (hard — never bypassed by signal quality):
+Rules (hard -- never bypassed by signal quality):
   1. ATR-based stop loss placement
-  2. ATR-based position sizing (risk ≤ 1% of allocated capital)
+  2. ATR-based position sizing (risk <= 1% of allocated capital)
   3. Max open positions per market group
   4. Daily loss cap (stop new entries if total ATOS equity down 3% today)
   5. Kill switch (STOP_TRADING file)
@@ -13,7 +13,7 @@ Rules (hard — never bypassed by signal quality):
   7. Cash affordability check (never spend more than available)
 
 Position sizing uses a LOCAL risk-capital tracker (same principle as
-kill_switch.py in the original bot) — not Saxo's inflated SIM balance.
+kill_switch.py in the original bot) -- not Saxo's inflated SIM balance.
 """
 
 import os
@@ -22,10 +22,10 @@ from datetime import date
 
 import pandas as pd
 
-# ── Configuration ──────────────────────────────────────────────────
+# -- Configuration --------------------------------------------------
 STARTING_CAPITAL_SEK  = 10_000   # total paper capital for ATOS
 RISK_PER_TRADE_PCT    = 0.01     # risk max 1% of market-group capital per trade
-ATR_STOP_MULTIPLE     = 2.5      # stop = entry - 2.5 × ATR
+ATR_STOP_MULTIPLE     = 2.5      # stop = entry - 2.5 * ATR
 MAX_POSITIONS_TOTAL   = 10       # max simultaneous open positions across all markets
 MAX_POSITIONS_PER_MKT = {
     "US Equities":   4,
@@ -41,7 +41,7 @@ KILL_SWITCH_FILE  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ST
 RISK_STATE_FILE   = os.path.join(os.path.dirname(os.path.dirname(__file__)),
                                   "data", "atos_risk_state.json")
 
-# ── Commission model (mirrors existing strategy.py) ────────────────
+# -- Commission model (mirrors existing strategy.py) ----------------
 COMMISSION_RATE  = 0.0008   # 0.08% of trade value (Saxo Classic tier)
 MIN_COMMISSION   = 1.00     # $1 USD minimum per order (~10 SEK)
 FX_USD_TO_SEK    = 10.5     # rough SEK/USD rate for commission floor (updated daily via fx.py if available)
@@ -51,9 +51,9 @@ def _load_state() -> dict:
     os.makedirs(os.path.dirname(RISK_STATE_FILE), exist_ok=True)
     if not os.path.exists(RISK_STATE_FILE):
         state = {
-            "risk_capital_sek":   STARTING_CAPITAL_SEK,
-            "day_start_equity":   STARTING_CAPITAL_SEK,
-            "last_reset_date":    date.today().isoformat(),
+            "available_cash_sek": STARTING_CAPITAL_SEK,
+            "day_start_equity_sek": STARTING_CAPITAL_SEK,
+            "last_reset_date": date.today().isoformat(),
         }
         _save_state(state)
         return state
@@ -71,8 +71,26 @@ def kill_switch_active() -> bool:
     return os.path.exists(KILL_SWITCH_FILE)
 
 
+def get_available_cash() -> float:
+    state = _load_state()
+    return state.get("available_cash_sek", state.get("risk_capital_sek", STARTING_CAPITAL_SEK))
+
+
 def get_risk_capital() -> float:
-    return _load_state()["risk_capital_sek"]
+    return get_available_cash()
+
+
+def get_total_equity(open_trades: list[dict] = None) -> float:
+    """Total equity = available cash + sum(shares * entry_price) for all open positions."""
+    state = _load_state()
+    cash = state.get("available_cash_sek", state.get("risk_capital_sek", STARTING_CAPITAL_SEK))
+    if open_trades is None:
+        return cash  # no position data available
+    position_value = sum(
+        (t.get("shares", 0) or 0) * (t.get("entry_price", 0) or 0)
+        for t in open_trades
+    )
+    return cash + position_value
 
 
 def record_fill(cash_delta_sek: float) -> float:
@@ -81,29 +99,30 @@ def record_fill(cash_delta_sek: float) -> float:
     Negative for buys (capital leaves), positive for sells (capital returns).
     """
     state = _load_state()
-    state["risk_capital_sek"] = max(0, state["risk_capital_sek"] + cash_delta_sek)
+    key = "available_cash_sek" if "available_cash_sek" in state else "risk_capital_sek"
+    state[key] = max(0, state[key] + cash_delta_sek)
     _save_state(state)
-    return state["risk_capital_sek"]
+    return state[key]
 
 
-def get_day_start_equity() -> float:
+def get_day_start_equity(open_trades: list[dict] = None) -> float:
     state = _load_state()
     today = date.today().isoformat()
     if state.get("last_reset_date") != today:
-        # New day — snapshot today's starting equity
-        state["day_start_equity"]  = state["risk_capital_sek"]
-        state["last_reset_date"]   = today
+        # New day -- snapshot today's starting equity
+        state["day_start_equity_sek"] = get_total_equity(open_trades)
+        state["last_reset_date"] = today
         _save_state(state)
-    return state["day_start_equity"]
+    return state.get("day_start_equity_sek", state.get("day_start_equity", STARTING_CAPITAL_SEK))
 
 
-def daily_loss_cap_breached() -> bool:
+def daily_loss_cap_breached(open_trades: list[dict] = None) -> bool:
     state = _load_state()
-    day_start = state.get("day_start_equity", state["risk_capital_sek"])
-    current   = state["risk_capital_sek"]
+    day_start = state.get("day_start_equity_sek", state.get("day_start_equity", STARTING_CAPITAL_SEK))
+    current_equity = get_total_equity(open_trades)
     if day_start <= 0:
         return False
-    drawdown = (day_start - current) / day_start
+    drawdown = (day_start - current_equity) / day_start
     return drawdown >= MAX_DAILY_LOSS_PCT
 
 
@@ -120,13 +139,13 @@ def calculate_stop(entry_price: float, atr: float) -> float:
     return entry_price - ATR_STOP_MULTIPLE * atr
 
 
-def calculate_position_size(capital_sek: float, entry_price_sek: float,
+def calculate_position_size(equity_sek: float, entry_price_sek: float,
                              stop_price_sek: float) -> int:
     """
     Risk-based position sizing.
     Never risk more than RISK_PER_TRADE_PCT of the market group's capital.
     """
-    risk_amount     = capital_sek * RISK_PER_TRADE_PCT
+    risk_amount     = equity_sek * RISK_PER_TRADE_PCT  # 1% of TOTAL equity
     per_share_risk  = entry_price_sek - stop_price_sek
     if per_share_risk <= 0:
         return 0
@@ -141,6 +160,7 @@ class RiskEngine:
 
     def __init__(self, open_trades: list[dict]):
         """open_trades: list of trade dicts from database.get_open_trades()"""
+        self.open_trades = open_trades
         self.open_total = len(open_trades)
         self.open_by_market: dict[str, int] = {}
         for t in open_trades:
@@ -168,7 +188,7 @@ class RiskEngine:
             result["reason"] = "Kill switch active (STOP_TRADING file)"
             return result
 
-        if daily_loss_cap_breached():
+        if daily_loss_cap_breached(self.open_trades):
             result["reason"] = f"Daily loss cap breached (>{MAX_DAILY_LOSS_PCT*100:.0f}%)"
             return result
 
@@ -187,15 +207,15 @@ class RiskEngine:
             return result
 
         if pd.isna(atr_sek) or atr_sek <= 0:
-            result["reason"] = "ATR unavailable — cannot set stop"
+            result["reason"] = "ATR unavailable -- cannot set stop"
             return result
 
-        risk_capital = get_risk_capital()
+        risk_equity = get_total_equity(self.open_trades)
         stop_price   = calculate_stop(entry_price_sek, atr_sek)
-        shares       = calculate_position_size(risk_capital, entry_price_sek, stop_price)
+        shares       = calculate_position_size(risk_equity, entry_price_sek, stop_price)
 
         if shares < 1:
-            result["reason"] = "Position size rounds to 0 shares — capital too small"
+            result["reason"] = "Position size rounds to 0 shares -- capital too small"
             return result
 
         comm     = commission_sek(shares, entry_price_sek)

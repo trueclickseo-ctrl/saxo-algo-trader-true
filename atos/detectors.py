@@ -216,11 +216,120 @@ class Detector5_Volume:
         return float(max(-100, min(100, score)))
 
 
-# ── Convenience: all 5 detectors ──────────────────────────────────
+class Detector6_SmartMoney:
+    """
+    Smart Money Detector — OBV + VWAP + Volume.
+    Best for: Identifying institutional accumulation/distribution.
+    """
+    name = "smart_money"
+
+    def score(self, row: pd.Series) -> float:
+        score = 0.0
+        if not row.get("has_volume", False) or pd.isna(row.get("vwap")) or pd.isna(row.get("obv")):
+            return 0.0
+            
+        obv_rising = row.get("obv_rising", False)
+        price_above_vwap = row["Close"] > row["vwap"]
+        vol_ratio = row.get("vol_ratio", 1.0)
+        
+        if obv_rising and price_above_vwap and vol_ratio > 1.3:
+            score += 60
+        elif obv_rising and price_above_vwap:
+            score += 35
+        elif price_above_vwap:
+            score += 15
+        elif not obv_rising and not price_above_vwap and vol_ratio > 1.5:
+            score -= 40
+        elif not obv_rising and not price_above_vwap:
+            score -= 20
+            
+        return float(max(-100, min(100, score)))
+
+
+class Detector7_MomentumQuality:
+    """
+    Momentum Quality Detector — ROC + Acceleration + RSI.
+    Best for: Measuring the health and sustainability of momentum.
+    """
+    name = "mom_quality"
+
+    def score(self, row: pd.Series) -> float:
+        score = 0.0
+        roc_10 = row.get("roc_10")
+        roc_20 = row.get("roc_20")
+        mom_accel = row.get("mom_acceleration")
+        rsi = row.get("rsi")
+        
+        if pd.isna(roc_10) or pd.isna(mom_accel) or pd.isna(roc_20):
+            return 0.0
+            
+        if roc_10 > 5 and mom_accel > 0 and pd.notna(rsi) and 45 < rsi < 70:
+            score += 70
+        elif roc_10 > 3 and mom_accel >= 0:
+            score += 45
+        elif roc_10 > 0 and roc_20 > 0:
+            score += 20
+        elif roc_10 < -5 and mom_accel < 0:
+            score -= 50
+        elif roc_10 < -3 and mom_accel < 0:
+            score -= 35
+        elif roc_10 < 0 and roc_20 < 0:
+            score -= 20
+            
+        return float(max(-100, min(100, score)))
+
+
+class Detector8_Regime:
+    """
+    Market Regime Detector — Contextual market states.
+    Best for: Adjusting aggressiveness based on volatility and trend states.
+    """
+    name = "regime"
+
+    def score(self, row: pd.Series) -> float:
+        score = 0.0
+        regime = row.get("regime", "TRANSITION")
+        atr_pct = row.get("atr_pct_rank")
+        adx = row.get("adx")
+        regime_shift = row.get("regime_shift", False)
+        
+        if regime == 'BULL' and pd.notna(atr_pct):
+            if atr_pct < 0.30:
+                score += 80
+            elif atr_pct < 0.70:
+                score += 50
+            elif atr_pct >= 0.70:
+                score += 20
+                
+        elif regime == 'BEAR' and pd.notna(adx):
+            if adx > 25:
+                score -= 60
+            elif adx > 15:
+                score -= 30
+                
+        elif regime == 'SIDEWAYS':
+            score -= 10
+            
+        elif regime == 'TRANSITION':
+            score += 0
+            
+        if regime_shift:
+            if regime == 'BULL':
+                score += 30
+            elif regime == 'BEAR':
+                score -= 20
+                
+        return float(max(-100, min(100, score)))
+
+
+# ── Convenience: all 8 detectors ──────────────────────────────────
 ALL_DETECTORS = [
     Detector1_Trend(),
     Detector2_Momentum(),
     Detector3_Breakout(),
     Detector4_MeanReversion(),
     Detector5_Volume(),
+    Detector6_SmartMoney(),
+    Detector7_MomentumQuality(),
+    Detector8_Regime(),
 ]

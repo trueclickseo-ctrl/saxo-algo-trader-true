@@ -28,6 +28,10 @@ def add_all(df: pd.DataFrame) -> pd.DataFrame:
     df = _volume_features(df)
     df = _adx(df)
     df = _market_structure(df)
+    df = _vwap(df)
+    df = _obv(df)
+    df = _rate_of_change(df)
+    df = _volatility_regime(df)
     return df
 
 
@@ -169,4 +173,51 @@ def _market_structure(df: pd.DataFrame, lookback: int = 5) -> pd.DataFrame:
         (df["Close"] > df["ema20"]) &          # closed above (bounce)
         (df["ema20"] > df["ema50"])             # still in uptrend
     )
+    return df
+
+
+def _vwap(df: pd.DataFrame) -> pd.DataFrame:
+    if "Volume" not in df.columns or df["Volume"].isna().all():
+        df["vwap"] = np.nan
+        return df
+    df["vwap"] = (df["Close"] * df["Volume"]).rolling(20).sum() / df["Volume"].rolling(20).sum()
+    return df
+
+
+def _obv(df: pd.DataFrame) -> pd.DataFrame:
+    if "Volume" not in df.columns or df["Volume"].isna().all():
+        df["obv"] = np.nan
+        df["obv_ema20"] = np.nan
+        df["obv_rising"] = False
+        return df
+    
+    close_diff = df["Close"].diff()
+    direction = pd.Series(0, index=df.index)
+    direction[close_diff > 0] = 1
+    direction[close_diff < 0] = -1
+    
+    df["obv"] = (direction * df["Volume"]).cumsum()
+    df["obv_ema20"] = df["obv"].ewm(span=20, adjust=False).mean()
+    df["obv_rising"] = df["obv"] > df["obv_ema20"]
+    return df
+
+
+def _rate_of_change(df: pd.DataFrame) -> pd.DataFrame:
+    df["roc_10"] = (df["Close"] / df["Close"].shift(10) - 1) * 100
+    df["roc_20"] = (df["Close"] / df["Close"].shift(20) - 1) * 100
+    df["mom_acceleration"] = df["roc_10"] - df["roc_10"].shift(5)
+    return df
+
+
+def _volatility_regime(df: pd.DataFrame) -> pd.DataFrame:
+    df["atr_pct_rank"] = df["atr"].rolling(60).rank(pct=True)
+    
+    conditions = [
+        (df["Close"] > df["ema200"]) & (df["adx"] > 20),
+        (df["Close"] < df["ema200"]) & (df["adx"] > 20),
+        (df["adx"] < 15)
+    ]
+    choices = ['BULL', 'BEAR', 'SIDEWAYS']
+    df["regime"] = np.select(conditions, choices, default='TRANSITION')
+    df["regime_shift"] = df["regime"] != df["regime"].shift(1)
     return df

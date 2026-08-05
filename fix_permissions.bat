@@ -1,28 +1,29 @@
 @echo off
-:: ============================================================
-:: ATOS — Fix File Permissions for Kashif user
-:: ============================================================
-:: Right-click this file → "Run as administrator" (ONE TIME ONLY)
-:: This grants full read/write access to user Kashif on all
-:: project files so all agents and tools can modify code.
-:: ============================================================
+REM ================================================
+REM Fix Permissions — Run as Administrator
+REM ================================================
+REM This script grants full access to ALL users on this PC
+REM for both the original files/ and the kwaseem clone.
+REM
+REM Run this by right-clicking → "Run as Administrator"
+REM ================================================
+
+echo Fixing ownership...
+takeown /f "e:\saxobackup\SaxoTrader\files" /r /d y
+takeown /f "e:\saxobackup\SaxoTrader\files_kwaseem" /r /d y
 
 echo.
-echo ========================================
-echo  ATOS — Fixing File Permissions
-echo ========================================
+echo Granting full permissions to Everyone...
+icacls "e:\saxobackup\SaxoTrader\files" /grant Everyone:(OI)(CI)F /T /Q /C
+icacls "e:\saxobackup\SaxoTrader\files_kwaseem" /grant Everyone:(OI)(CI)F /T /Q /C
+
 echo.
+echo Also fixing git safe.directory...
+git config --global --add safe.directory e:/saxobackup/SaxoTrader/files
+git config --global --add safe.directory e:/saxobackup/SaxoTrader/files_kwaseem
 
-icacls "E:\saxobackup\SaxoTrader\files" /grant "Kashif:(OI)(CI)F" /T
-
-if %ERRORLEVEL% EQU 0 (
-    echo.
-    echo  SUCCESS — Kashif now has full access to all project files.
-    echo.
-) else (
-    echo.
-    echo  FAILED — Make sure you right-clicked and chose "Run as administrator"
-    echo.
-)
-
+echo.
+echo ================================================
+echo Done! All users and Claude agents can now read/write.
+echo ================================================
 pause

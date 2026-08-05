@@ -1,7 +1,7 @@
 """
 atos/database.py
 -----------------
-SQLite database — the permanent memory of ATOS.
+SQLite database -- the permanent memory of ATOS.
 Auto-creates all tables on first run. No setup required.
 
 Tables:
@@ -111,9 +111,32 @@ def init_db():
             UNIQUE(alloc_date, market_group)
         );
         """)
+    migrate_schema()
 
+def migrate_schema():
+    """Add columns for ATOS v2 detectors. Safe to call multiple times."""
+    migrations = [
+        "ALTER TABLE trades ADD COLUMN d6_smart_money REAL",
+        "ALTER TABLE trades ADD COLUMN d7_mom_quality REAL",
+        "ALTER TABLE trades ADD COLUMN d8_regime REAL",
+        "ALTER TABLE trades ADD COLUMN trailing_stop_high REAL",
+        "ALTER TABLE trades ADD COLUMN regime_at_entry TEXT",
+        "ALTER TABLE signals ADD COLUMN d6_smart_money REAL",
+        "ALTER TABLE signals ADD COLUMN d7_mom_quality REAL",
+        "ALTER TABLE signals ADD COLUMN d8_regime REAL",
+        "ALTER TABLE signals ADD COLUMN regime TEXT",
+        "ALTER TABLE detector_weights ADD COLUMN w_smart_money REAL DEFAULT 1.0",
+        "ALTER TABLE detector_weights ADD COLUMN w_mom_quality REAL DEFAULT 1.0",
+        "ALTER TABLE detector_weights ADD COLUMN w_regime REAL DEFAULT 1.0",
+    ]
+    with _conn() as conn:
+        for sql in migrations:
+            try:
+                conn.execute(sql)
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
-# ── Trades ─────────────────────────────────────────────────────────
+# -- Trades ---------------------------------------------------------
 
 def insert_trade(data: dict) -> int:
     """Insert a new open trade. Returns the trade id."""
@@ -122,11 +145,13 @@ def insert_trade(data: dict) -> int:
             INSERT INTO trades
               (market_group, ticker, direction, entry_date, entry_price, shares,
                commission_sek, entry_score, d1_trend, d2_momentum, d3_breakout,
-               d4_mean_revert, d5_volume, stop_price)
+               d4_mean_revert, d5_volume, d6_smart_money, d7_mom_quality, d8_regime,
+               trailing_stop_high, regime_at_entry, stop_price)
             VALUES
               (:market_group, :ticker, :direction, :entry_date, :entry_price, :shares,
                :commission_sek, :entry_score, :d1_trend, :d2_momentum, :d3_breakout,
-               :d4_mean_revert, :d5_volume, :stop_price)
+               :d4_mean_revert, :d5_volume, :d6_smart_money, :d7_mom_quality, :d8_regime,
+               :trailing_stop_high, :regime_at_entry, :stop_price)
         """, data)
         return cur.lastrowid
 
@@ -174,7 +199,7 @@ def get_all_closed_trades() -> list[dict]:
         return [dict(r) for r in rows]
 
 
-# ── Signals ────────────────────────────────────────────────────────
+# -- Signals --------------------------------------------------------
 
 def insert_signal(data: dict):
     with _conn() as conn:
@@ -182,15 +207,17 @@ def insert_signal(data: dict):
             INSERT INTO signals
               (signal_date, market_group, ticker, final_score,
                d1_trend, d2_momentum, d3_breakout, d4_mean_revert, d5_volume,
+               d6_smart_money, d7_mom_quality, d8_regime, regime,
                action, executed, block_reason)
             VALUES
               (:signal_date, :market_group, :ticker, :final_score,
                :d1_trend, :d2_momentum, :d3_breakout, :d4_mean_revert, :d5_volume,
+               :d6_smart_money, :d7_mom_quality, :d8_regime, :regime,
                :action, :executed, :block_reason)
         """, data)
 
 
-# ── Detector weights ───────────────────────────────────────────────
+# -- Detector weights -----------------------------------------------
 
 def get_current_weights() -> dict:
     """Return the most recent weight row, or equal defaults if none exists."""
@@ -199,17 +226,22 @@ def get_current_weights() -> dict:
             "SELECT * FROM detector_weights ORDER BY id DESC LIMIT 1"
         ).fetchone()
     if row:
+        row_dict = dict(row)
         return {
-            "w_trend":       row["w_trend"],
-            "w_momentum":    row["w_momentum"],
-            "w_breakout":    row["w_breakout"],
-            "w_mean_revert": row["w_mean_revert"],
-            "w_volume":      row["w_volume"],
-            "num_trades":    row["num_trades_used"],
+            "w_trend":       row_dict.get("w_trend", 1.0),
+            "w_momentum":    row_dict.get("w_momentum", 1.0),
+            "w_breakout":    row_dict.get("w_breakout", 1.0),
+            "w_mean_revert": row_dict.get("w_mean_revert", 1.0),
+            "w_volume":      row_dict.get("w_volume", 1.0),
+            "w_smart_money": row_dict.get("w_smart_money", 1.0),
+            "w_mom_quality": row_dict.get("w_mom_quality", 1.0),
+            "w_regime":      row_dict.get("w_regime", 1.0),
+            "num_trades":    row_dict.get("num_trades_used", 0),
         }
-    # First run — return equal weights
+    # First run -- return equal weights
     return {"w_trend": 1.0, "w_momentum": 1.0, "w_breakout": 1.0,
-            "w_mean_revert": 1.0, "w_volume": 1.0, "num_trades": 0}
+            "w_mean_revert": 1.0, "w_volume": 1.0, "w_smart_money": 1.0,
+            "w_mom_quality": 1.0, "w_regime": 1.0, "num_trades": 0}
 
 
 def save_weights(weights: dict, num_trades: int, note: str = ""):
@@ -217,14 +249,15 @@ def save_weights(weights: dict, num_trades: int, note: str = ""):
         conn.execute("""
             INSERT INTO detector_weights
               (updated_at, num_trades_used, w_trend, w_momentum,
-               w_breakout, w_mean_revert, w_volume, note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               w_breakout, w_mean_revert, w_volume, w_smart_money, w_mom_quality, w_regime, note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (datetime.now().isoformat(timespec="seconds"), num_trades,
               weights["w_trend"], weights["w_momentum"], weights["w_breakout"],
-              weights["w_mean_revert"], weights["w_volume"], note))
+              weights["w_mean_revert"], weights["w_volume"], weights.get("w_smart_money", 1.0),
+              weights.get("w_mom_quality", 1.0), weights.get("w_regime", 1.0), note))
 
 
-# ── Equity curve ───────────────────────────────────────────────────
+# -- Equity curve ---------------------------------------------------
 
 def upsert_equity(data: dict):
     with _conn() as conn:

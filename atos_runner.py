@@ -43,7 +43,8 @@ from atos.features import add_all
 from atos.decision_engine import scan_universe, BUY_THRESHOLD
 from atos.learner import run_learning_pass, format_weight_bar
 from atos.risk import (
-    RiskEngine, get_risk_capital, record_fill, get_day_start_equity,
+    RiskEngine, get_risk_capital, get_available_cash, get_total_equity,
+    record_fill, get_day_start_equity,
     daily_loss_cap_breached, kill_switch_active, commission_sek,
     STARTING_CAPITAL_SEK,
 )
@@ -145,7 +146,8 @@ def upload_dashboard(local_file: str):
 # ══════════════════════════════════════════════════════════════════
 
 def print_banner(total_equity: float, day_start: float, open_count: int,
-                 weights: dict, todays_actions: list, learning_result: dict):
+                 weights: dict, todays_actions: list, learning_result: dict,
+                 current_regime: str = "unknown"):
     pct = (total_equity - STARTING_CAPITAL_SEK) / STARTING_CAPITAL_SEK * 100
     day_pnl = total_equity - day_start
     sign    = "+" if pct >= 0 else ""
@@ -160,12 +162,17 @@ def print_banner(total_equity: float, day_start: float, open_count: int,
 ║  Total Equity:  {total_equity:>8,.0f} SEK  ({sign}{pct:.2f}%)   Open: {open_count}/10     ║
 ║  Today's P&L:   {dpnl_s:>10} SEK                                 ║
 ╠══════════════════════════════════════════════════════════════════╣
+║  MARKET REGIME: {current_regime:<49}║
+╠══════════════════════════════════════════════════════════════════╣
 ║  ALGORITHM WEIGHTS  (learned from {num_t} trades)               ║
 ║  Trend      {format_weight_bar(w.get('w_trend',1.0))}  {w.get('w_trend',1.0):.3f}                           ║
 ║  Momentum   {format_weight_bar(w.get('w_momentum',1.0))}  {w.get('w_momentum',1.0):.3f}                           ║
 ║  Breakout   {format_weight_bar(w.get('w_breakout',1.0))}  {w.get('w_breakout',1.0):.3f}                           ║
 ║  Mean Rev   {format_weight_bar(w.get('w_mean_revert',1.0))}  {w.get('w_mean_revert',1.0):.3f}                           ║
 ║  Volume     {format_weight_bar(w.get('w_volume',1.0))}  {w.get('w_volume',1.0):.3f}                           ║
+║  SmartMoney {format_weight_bar(w.get('w_smart_money',1.0))}  {w.get('w_smart_money',1.0):.3f}                           ║
+║  MomQuality {format_weight_bar(w.get('w_mom_quality',1.0))}  {w.get('w_mom_quality',1.0):.3f}                           ║
+║  Regime     {format_weight_bar(w.get('w_regime',1.0))}  {w.get('w_regime',1.0):.3f}                           ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║  TODAY'S ACTIONS                                                 ║""")
 
@@ -202,9 +209,10 @@ def run_cycle():
         print("STOP_TRADING file present — halted. Delete it to resume.")
         return
 
-    day_start = get_day_start_equity()
+    open_trades = db.get_open_trades()
+    day_start = get_day_start_equity(open_trades)
 
-    if daily_loss_cap_breached():
+    if daily_loss_cap_breached(open_trades):
         print("Daily loss cap breached — no new entries today.")
 
     # ── 2. Saxo account state ─────────────────────────────────────
@@ -221,7 +229,7 @@ def run_cycle():
         cash_sek = get_risk_capital()
 
     # ── 3. Load state ─────────────────────────────────────────────
-    open_trades   = db.get_open_trades()
+    # open_trades already fetched
     open_tickers  = {t["ticker"] for t in open_trades}
     risk_capital  = get_risk_capital()
     weights       = db.get_current_weights()
@@ -265,9 +273,24 @@ def run_cycle():
             stop_price = trade.get("stop_price", 0) or 0
             hit_stop   = (pd.notna(last_row.get("Low")) and
                           last_row["Low"] <= stop_price and stop_price > 0)
-            if not hit_stop:
+            exit_reason = None
+            if hit_stop:
+                exit_reason = "stop_loss"
+                
+            # Check trailing stop (track highest price since entry)
+            current_high = last_row.get('High', last_row['Close'])
+            trailing_high = trade.get('trailing_stop_high') or trade.get('entry_price', 0)
+            if current_high > trailing_high:
+                trailing_high = current_high
+            
+            atr_val = last_row.get('atr', 0)
+            if pd.notna(atr_val) and atr_val > 0 and trailing_high > 0:
+                trailing_stop_price = trailing_high - 2.0 * atr_val
+                if last_row['Close'] <= trailing_stop_price:
+                    exit_reason = 'trailing_stop'
+            
+            if exit_reason is None:
                 continue
-            exit_reason = "stop_loss"
         else:
             exit_reason = "score_dropped"
 
@@ -316,12 +339,16 @@ def run_cycle():
             "d3_breakout": decision.d3_breakout if decision else 0,
             "d4_mean_revert": decision.d4_mean_revert if decision else 0,
             "d5_volume": decision.d5_volume if decision else 0,
+            "d6_smart_money": getattr(decision, 'd6_smart_money', 0) if decision else 0,
+            "d7_mom_quality": getattr(decision, 'd7_mom_quality', 0) if decision else 0,
+            "d8_regime": getattr(decision, 'd8_regime', 0) if decision else 0,
+            "regime": getattr(decision, 'regime', 'unknown') if decision else 'unknown',
             "action": "EXIT", "executed": 1 if order_ok else 0,
             "block_reason": None if order_ok else "order_failed",
         })
 
     # ── 6b. New entries ───────────────────────────────────────────
-    if not daily_loss_cap_breached():
+    if not daily_loss_cap_breached(open_trades):
         buy_candidates = [
             (ticker, dec) for ticker, dec in decisions.items()
             if dec.action == "BUY" and ticker not in open_tickers
@@ -351,10 +378,15 @@ def run_cycle():
             db.insert_signal({
                 "signal_date": date.today().isoformat(), "market_group": mkt,
                 "ticker": ticker, "final_score": decision.score,
-                "d1_trend": decision.d1_trend, "d2_momentum": decision.d2_momentum,
+                "d1_trend": decision.d1_trend,
+                "d2_momentum": decision.d2_momentum,
                 "d3_breakout": decision.d3_breakout,
                 "d4_mean_revert": decision.d4_mean_revert,
                 "d5_volume": decision.d5_volume,
+                "d6_smart_money": getattr(decision, 'd6_smart_money', 0) if decision else 0,
+                "d7_mom_quality": getattr(decision, 'd7_mom_quality', 0) if decision else 0,
+                "d8_regime": getattr(decision, 'd8_regime', 0) if decision else 0,
+                "regime": getattr(decision, 'regime', 'unknown') if decision else 'unknown',
                 "action": "BUY",
                 "executed": 1 if approval["approved"] else 0,
                 "block_reason": None if approval["approved"] else approval["reason"],
@@ -399,7 +431,12 @@ def run_cycle():
                 "d3_breakout": decision.d3_breakout,
                 "d4_mean_revert": decision.d4_mean_revert,
                 "d5_volume": decision.d5_volume,
+                "d6_smart_money": getattr(decision, 'd6_smart_money', 0) if decision else 0,
+                "d7_mom_quality": getattr(decision, 'd7_mom_quality', 0) if decision else 0,
+                "d8_regime": getattr(decision, 'd8_regime', 0) if decision else 0,
                 "stop_price": stop_p,
+                "trailing_stop_high": entry_price,
+                "regime_at_entry": getattr(decision, 'regime', 'unknown') if decision else 'unknown',
             })
 
             if order_ok:
@@ -422,7 +459,7 @@ def run_cycle():
 
     # ── 8. Equity snapshot ────────────────────────────────────────
     open_trades_now = db.get_open_trades()
-    total_equity    = get_risk_capital()
+    total_equity    = get_total_equity(open_trades_now)
 
     equity_by_mkt = {k: 0.0 for k in ["US Equities","OMX30","DAX40","Commodities","Forex"]}
     for t in open_trades_now:
@@ -443,8 +480,9 @@ def run_cycle():
     })
 
     # ── 9. Terminal output ────────────────────────────────────────
+    current_regime = next(iter(decisions.values())).regime if decisions else "unknown"
     print_banner(total_equity, day_start, len(open_trades_now),
-                 weights, todays_actions, learning_result)
+                 weights, todays_actions, learning_result, current_regime)
 
     # ── 10. Generate + upload HTML dashboard ──────────────────────
     print("\n  Generating HTML dashboard...")
