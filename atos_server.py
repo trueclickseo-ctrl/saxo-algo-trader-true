@@ -209,7 +209,7 @@ HTML = """<!DOCTYPE html>
     <div class="kpi-row">
         <div class="card kpi"><h3>Total Equity</h3><div class="kpi-val" id="kpiEq">---</div><div class="kpi-sub" id="kpiEqSub">---</div></div>
         <div class="card kpi"><h3>Today's P&L</h3><div class="kpi-val" id="kpiPnl">---</div><div class="kpi-sub">Realized today</div></div>
-        <div class="card kpi"><h3>Open Positions</h3><div class="kpi-val" id="kpiPos">0/10</div><div class="kpi-sub">Active trades</div></div>
+        <div class="card kpi"><h3>Open Positions</h3><div class="kpi-val" id="kpiPos">0/10</div><div class="kpi-sub" id="kpiRegime">Regime: ---</div></div>
         <div class="card kpi"><h3>Algorithm Stats</h3><div class="kpi-val" id="kpiWin">---%</div><div class="kpi-sub" id="kpiPf">PF: --- | Trades: 0</div></div>
     </div>
 
@@ -228,8 +228,8 @@ HTML = """<!DOCTYPE html>
         <div class="sec-title">Today's Signals</div>
         <div style="overflow-x:auto">
             <table id="tblSig">
-                <thead><tr><th>Action</th><th>Ticker</th><th>Market</th><th>Score</th><th>D1-D5</th><th>Note</th></tr></thead>
-                <tbody><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
+                <thead><tr><th>Action</th><th>Ticker</th><th>Market</th><th>Score</th><th>Regime</th><th>D1-D8</th><th>Note</th></tr></thead>
+                <tbody><tr><td colspan="7" class="empty">Loading...</td></tr></tbody>
             </table>
         </div>
     </div>
@@ -238,8 +238,8 @@ HTML = """<!DOCTYPE html>
         <div class="sec-title">Open Positions</div>
         <div style="overflow-x:auto">
             <table id="tblOpen">
-                <thead><tr><th>Ticker</th><th>Market</th><th>Shares</th><th>Entry Price</th><th>Entry Date</th><th>Score</th><th>D1-D5</th></tr></thead>
-                <tbody><tr><td colspan="7" class="empty">Loading...</td></tr></tbody>
+                <thead><tr><th>Ticker</th><th>Market</th><th>Shares</th><th>Entry Price</th><th>Entry Date</th><th>Score</th><th>Regime</th><th>D1-D8</th></tr></thead>
+                <tbody><tr><td colspan="8" class="empty">Loading...</td></tr></tbody>
             </table>
         </div>
     </div>
@@ -248,13 +248,13 @@ HTML = """<!DOCTYPE html>
         <div class="sec-title">Trade History (Closed)</div>
         <div style="overflow-x:auto">
             <table id="tblHist">
-                <thead><tr><th>Ticker</th><th>Market</th><th>Entry</th><th>Exit</th><th>Shares</th><th>P&L</th><th>Reason</th><th>D1-D5</th></tr></thead>
+                <thead><tr><th>Ticker</th><th>Market</th><th>Entry</th><th>Exit</th><th>Shares</th><th>P&L</th><th>Reason</th><th>D1-D8</th></tr></thead>
                 <tbody><tr><td colspan="8" class="empty">Loading...</td></tr></tbody>
             </table>
         </div>
     </div>
 
-    <footer>ATOS v1 &middot; Saxo SIM (Paper Money) &middot; localhost:8070 &middot; OAuth via localhost</footer>
+    <footer>ATOS v2 &middot; 8 Adaptive Detectors &middot; Saxo SIM (Paper Money) &middot; localhost:8070</footer>
 </div>
 
 <script>
@@ -297,9 +297,11 @@ HTML = """<!DOCTYPE html>
         return '#ef4444';
     }
 
-    function pills(d1,d2,d3,d4,d5) {
-        return `<div class="pills">`+[d1,d2,d3,d4,d5].map(v=>
-            `<span class="pill" style="background:${pillColor(v)}" title="${v !== null ? v : '-'}">${v !== null && v !== undefined ? Math.round(v) : '-'}</span>`
+    function pills(d1,d2,d3,d4,d5,d6,d7,d8) {
+        const names = ['T','M','B','MR','V','SM','MQ','R'];
+        const vals = [d1,d2,d3,d4,d5,d6,d7,d8];
+        return `<div class="pills">`+vals.map((v,i)=>
+            `<span class="pill" style="background:${pillColor(v)}" title="${names[i]}: ${v !== null ? v : '-'}">${v !== null && v !== undefined ? Math.round(v) : '-'}</span>`
         ).join('')+`</div>`;
     }
 
@@ -375,13 +377,14 @@ HTML = """<!DOCTYPE html>
             const wb = document.getElementById('weightsBox');
             const w  = wts && wts.current;
             if (w) {
-                const names  = ['w_trend','w_momentum','w_breakout','w_mean_revert','w_volume'];
-                const labels = ['Trend (D1)','Momentum (D2)','Breakout (D3)','Mean Revert (D4)','Volume (D5)'];
+                const names  = ['w_trend','w_momentum','w_breakout','w_mean_revert','w_volume','w_smart_money','w_mom_quality','w_regime'];
+                const labels = ['Trend (D1)','Momentum (D2)','Breakout (D3)','Mean Revert (D4)','Volume (D5)','Smart Money (D6)','Mom Quality (D7)','Regime (D8)'];
+                const colors = ['#6366f1','#8b5cf6','#a855f7','#ec4899','#f59e0b','#10b981','#06b6d4','#f97316'];
                 wb.innerHTML = names.map((n,i)=>{
                     const v = w[n]||1; const p = Math.min((v/2.5)*100,100);
                     return `<div class="witem">
                         <div class="whead"><span>${labels[i]}</span><strong>${v.toFixed(2)}</strong></div>
-                        <div class="wbg"><div class="wfill" style="width:${p}%"></div></div>
+                        <div class="wbg"><div class="wfill" style="width:${p}%;background:${colors[i]}"></div></div>
                     </div>`;
                 }).join('') + `<div style="font-size:12px;color:var(--sub);margin-top:12px">Trades learned from: ${w.num_trades_used || 0}</div>`;
             } else {
@@ -395,10 +398,11 @@ HTML = """<!DOCTYPE html>
                     <td><span class="badge ${s.action==='BUY'?'buy':s.action==='EXIT'?'exit':'blocked'}">${s.action}</span></td>
                     <td><strong>${s.ticker}</strong></td><td>${s.market_group}</td>
                     <td>${s.final_score!=null?s.final_score.toFixed(1):'-'}</td>
-                    <td>${pills(s.d1_trend,s.d2_momentum,s.d3_breakout,s.d4_mean_revert,s.d5_volume)}</td>
+                    <td><span class="badge" style="font-size:10px;padding:2px 6px;background:${s.regime==='BULL'?'#10b981':s.regime==='BEAR'?'#ef4444':s.regime==='SIDEWAYS'?'#f59e0b':'#6366f1'}">${s.regime||'---'}</span></td>
+                    <td>${pills(s.d1_trend,s.d2_momentum,s.d3_breakout,s.d4_mean_revert,s.d5_volume,s.d6_smart_money,s.d7_mom_quality,s.d8_regime)}</td>
                     <td style="font-size:12px;color:var(--sub)">${s.block_reason||''}</td>
                 </tr>`).join('')
-                : '<tr><td colspan="6" class="empty">No signals recorded today — run atos_runner.py to scan markets</td></tr>';
+                : '<tr><td colspan="7" class="empty">No signals recorded today — run atos_runner.py to scan markets</td></tr>';
 
             // Open positions
             const ob = document.querySelector('#tblOpen tbody');
@@ -407,9 +411,10 @@ HTML = """<!DOCTYPE html>
                     <td><strong>${p.ticker}</strong></td><td>${p.market_group}</td>
                     <td>${p.shares}</td><td>${fmt(p.entry_price)}</td><td>${p.entry_date}</td>
                     <td>${p.entry_score!=null?p.entry_score.toFixed(1):'-'}</td>
-                    <td>${pills(p.d1_trend,p.d2_momentum,p.d3_breakout,p.d4_mean_revert,p.d5_volume)}</td>
+                    <td><span class="badge" style="font-size:10px;padding:2px 6px;background:${p.regime_at_entry==='BULL'?'#10b981':p.regime_at_entry==='BEAR'?'#ef4444':p.regime_at_entry==='SIDEWAYS'?'#f59e0b':'#6366f1'}">${p.regime_at_entry||'---'}</span></td>
+                    <td>${pills(p.d1_trend,p.d2_momentum,p.d3_breakout,p.d4_mean_revert,p.d5_volume,p.d6_smart_money,p.d7_mom_quality,p.d8_regime)}</td>
                 </tr>`).join('')
-                : '<tr><td colspan="7" class="empty">No open positions</td></tr>';
+                : '<tr><td colspan="8" class="empty">No open positions</td></tr>';
 
             // History
             const hb = document.querySelector('#tblHist tbody');
@@ -419,7 +424,7 @@ HTML = """<!DOCTYPE html>
                     <td>${t.entry_date}</td><td>${t.exit_date||'-'}</td><td>${t.shares}</td>
                     <td class="${(t.pnl_sek||0)>=0?'ok':'bad'}">${(t.pnl_sek||0)>0?'+':''}${fmt(t.pnl_sek)}</td>
                     <td style="font-size:12px">${t.exit_reason||'-'}</td>
-                    <td>${pills(t.d1_trend,t.d2_momentum,t.d3_breakout,t.d4_mean_revert,t.d5_volume)}</td>
+                    <td>${pills(t.d1_trend,t.d2_momentum,t.d3_breakout,t.d4_mean_revert,t.d5_volume,t.d6_smart_money,t.d7_mom_quality,t.d8_regime)}</td>
                 </tr>`).join('')
                 : '<tr><td colspan="8" class="empty">No closed trades yet</td></tr>';
 
