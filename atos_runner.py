@@ -69,6 +69,7 @@ CONSENSUS_MIN_AGREEMENT = 3     # >= 3 of 6 strategies must vote BUY
 ASSET_TYPE_MAP = {      # Saxo asset type per market group
     "US Equities":  "Stock",
     "OMX30":        "Stock",
+    "CPH25":        "Stock",
     "DAX40":        "Stock",
     "Commodities":  "Etf",
     "Forex":        "FxSpot",
@@ -500,20 +501,23 @@ def run_cycle():
     open_trades_now = db.get_open_trades()
     total_equity    = get_total_equity(open_trades_now)
 
-    equity_by_mkt = {k: 0.0 for k in ["US Equities","OMX30","DAX40","Commodities","Forex"]}
+    equity_by_mkt: dict[str, float] = {}
     for t in open_trades_now:
-        mkt = t.get("market_group","Unknown")
-        if mkt in equity_by_mkt:
-            equity_by_mkt[mkt] += (t.get("shares",0) or 0) * (t.get("entry_price",0) or 0)
+        mkt    = t.get("market_group", "Unknown")
+        shares = t.get("shares", 0) or 0
+        price  = t.get("entry_price", 0) or 0
+        rate   = fx.get_rate_to_sek(_currency_for(mkt))   # FX-convert to SEK
+        equity_by_mkt[mkt] = equity_by_mkt.get(mkt, 0.0) + shares * price * rate
 
     db.upsert_equity({
         "snap_date":        date.today().isoformat(),
         "total_equity_sek": total_equity,
-        "us_equity_sek":    equity_by_mkt["US Equities"],
-        "omx30_equity_sek": equity_by_mkt["OMX30"],
-        "dax_equity_sek":   equity_by_mkt["DAX40"],
-        "commodities_sek":  equity_by_mkt["Commodities"],
-        "forex_sek":        equity_by_mkt["Forex"],
+        "us_equity_sek":    equity_by_mkt.get("US Equities", 0.0),
+        "omx30_equity_sek": equity_by_mkt.get("OMX30", 0.0),
+        "cph25_equity_sek": equity_by_mkt.get("CPH25", 0.0),
+        "dax_equity_sek":   equity_by_mkt.get("DAX40", 0.0),
+        "commodities_sek":  equity_by_mkt.get("Commodities", 0.0),
+        "forex_sek":        equity_by_mkt.get("Forex", 0.0),
         "open_positions":   len(open_trades_now),
         "trades_today":     len([a for a in todays_actions if a["action"] in ("BUY","EXIT")]),
     })
@@ -567,10 +571,11 @@ def _currency_for(market_group: str) -> str:
     """Best-guess currency per market group for FX conversion."""
     return {
         "US Equities": "USD",
+        "OMX30":       "SEK",
+        "CPH25":       "DKK",
+        "DAX40":       "EUR",
         "Commodities": "USD",
         "Forex":       "USD",
-        "OMX30":       "SEK",
-        "DAX40":       "EUR",
     }.get(market_group, "USD")
 
 

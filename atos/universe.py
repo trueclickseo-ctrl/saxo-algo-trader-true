@@ -56,6 +56,14 @@ DAX40_TICKERS = [
 
 EUROPE_TICKERS = OMX30_TICKERS + DAX40_TICKERS
 
+# OMX Copenhagen 25 (CPH25) — DKK. Only the constituents currently mapped to
+# Saxo UICs in data/instrument_map.csv are listed here so they can trade
+# immediately; extend this list after a reviewed lookup for the rest of OMXC25.
+CPH25_TICKERS = [
+    "NOVO-B.CO",   "DSV.CO",     "DANSKE.CO",  "MAERSK-B.CO", "MAERSK-A.CO",
+    "ORSTED.CO",   "NSIS-B.CO",  "VWS.CO",     "CARL-B.CO",   "GMAB.CO",
+]
+
 # ── TIER 3: Commodities (via ETFs — available on Saxo as CfdOnEtc) ─
 # Gold and Oil trend independently of equities — critical diversification.
 # In 2020 COVID crash: stocks -30%, Gold +25%. In 2022: Oil +80%, stocks -20%.
@@ -76,15 +84,18 @@ FOREX_TICKERS = [
 ]
 
 # ── FULL ATOS UNIVERSE ─────────────────────────────────────────────
-ATOS_UNIVERSE = US_TICKERS + EUROPE_TICKERS + COMMODITY_TICKERS + FOREX_TICKERS
+# Active markets (stock-only): US large-cap (S&P 500 + Nasdaq 100, combined),
+# OMX30 (Stockholm, SEK), CPH25 (Copenhagen, DKK).
+# DAX40 / Commodities / Forex are intentionally OUT of the active universe
+# (Forex is handled by a separate quant system). Their ticker lists remain
+# defined above for backward-compatible imports only.
+ATOS_UNIVERSE = US_TICKERS + OMX30_TICKERS + CPH25_TICKERS
 
 # Market group labels — used for per-market performance reporting
 MARKET_GROUPS = {
     "US Equities":   set(US_TICKERS),
     "OMX30":         set(OMX30_TICKERS),
-    "DAX40":         set(DAX40_TICKERS),
-    "Commodities":   set(COMMODITY_TICKERS),
-    "Forex":         set(FOREX_TICKERS),
+    "CPH25":         set(CPH25_TICKERS),
 }
 
 def market_of(ticker: str) -> str:
@@ -95,11 +106,9 @@ def market_of(ticker: str) -> str:
 
 # ── Capital allocation weights (initial — adapt over time) ─────────
 INITIAL_MARKET_WEIGHTS = {
-    "US Equities":  0.45,   # Highest historical Sharpe
-    "OMX30":        0.15,   # Home market
-    "DAX40":        0.15,   # European diversifier
-    "Commodities":  0.15,   # Non-correlated asset class
-    "Forex":        0.10,   # Counter-equity hedge
+    "US Equities":  0.50,   # Highest historical Sharpe
+    "OMX30":        0.25,   # Home market (Stockholm)
+    "CPH25":        0.25,   # Copenhagen diversifier
 }
 
 # Asset-class specific detector tuning

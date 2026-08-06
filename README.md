@@ -279,7 +279,7 @@ Equity:            Cash + open position values (Bug #5 FIXED)
 Risk per trade:    1% of TOTAL EQUITY, ATR-based position size
 Stop loss:         Entry − 2.5 × ATR(14)
 Trailing stop:     Peak price − 2.0 × ATR (locks in profits) [v2 NEW]
-Max positions:     10 total (US=4, OMX30=2, DAX=2, Commodities=2, Forex=2)
+Max positions:     8 total (US=4, OMX30=2, CPH25=2)   [Agent #6: stock-only]
 Daily loss cap:    3% — no new entries if equity down >3% today
 Commission:        0.08% per trade, min 1 USD (~10.5 SEK)
 ```
@@ -370,16 +370,21 @@ Register-ScheduledTask -TaskName "ATOS Daily Run" `
 ## 14. Market Universe
 
 ```
-71 instruments total across 5 groups:
-  US Equities (35)   — AAPL, MSFT, NVDA, AMZN, META... max 4 positions
-  OMX30 (15)         — Swedish blue chips              max 2 positions
-  DAX40 (10)         — German blue chips               max 2 positions
-  Commodities (4)    — GLD, SLV, USO, GDX              max 2 positions
-  Forex (3)          — EURUSD=X, GBPUSD=X, USDJPY=X   max 2 positions
+STOCK-ONLY — 64 instruments across 3 active groups (Agent #6).
+Forex is intentionally out (handled by a separate quant system).
 
-Detector overrides:
-  Forex:       D4 MeanReversion DISABLED, Trend weight ×1.3
-  Commodities: D4 MeanReversion DISABLED, Breakout weight ×1.3
+  US Equities (39)  — S&P 500 + Nasdaq 100, combined & deduped   max 4 positions
+                      17 UIC-mapped & tradable now; 22 need a lookup (below)
+  OMX30 (15)        — Stockholm blue chips (SEK)                  max 2 positions   [all mapped]
+  CPH25 (10)        — Copenhagen / OMXC25 (DKK), mapped names     max 2 positions   [all mapped]
+  Max total open positions: 8   →  42 instruments tradable right now
+
+Dropped from the active universe: DAX40, Commodities, Forex. Their ticker
+lists remain defined in atos/universe.py for backward-compatible imports only.
+
+Unmapped US names (BUY path skips them safely until UICs are looked up):
+  ABBV, ADBE, BA, BAC, CAT, COP, CRM, CVX, DIS, GS, HD, HON, JNJ, JPM,
+  LLY, MA, MCD, MRK, QCOM, UNH, V, XOM
 ```
 
 ---

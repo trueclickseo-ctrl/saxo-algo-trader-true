@@ -26,13 +26,11 @@ import pandas as pd
 STARTING_CAPITAL_SEK  = 10_000   # total paper capital for ATOS
 RISK_PER_TRADE_PCT    = 0.01     # risk max 1% of market-group capital per trade
 ATR_STOP_MULTIPLE     = 2.5      # stop = entry - 2.5 * ATR
-MAX_POSITIONS_TOTAL   = 10       # max simultaneous open positions across all markets
+MAX_POSITIONS_TOTAL   = 8        # max simultaneous open positions across all markets
 MAX_POSITIONS_PER_MKT = {
     "US Equities":   4,
     "OMX30":         2,
-    "DAX40":         2,
-    "Commodities":   2,
-    "Forex":         2,
+    "CPH25":         2,
 }
 MAX_DAILY_LOSS_PCT    = 0.03     # stop new entries if ATOS down 3% today
 MIN_SCORE_TO_ENTER    = 55       # minimum combined score to place a BUY
@@ -65,10 +63,11 @@ def _load_state() -> dict:
 # SEK for equity. Mirrors _currency_for() in atos_runner.py.
 _MARKET_CURRENCY = {
     "US Equities": "USD",
+    "OMX30":       "SEK",
+    "CPH25":       "DKK",
+    "DAX40":       "EUR",
     "Commodities": "USD",
     "Forex":       "USD",
-    "OMX30":       "SEK",
-    "DAX40":       "EUR",
 }
 
 

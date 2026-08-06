@@ -128,6 +128,7 @@ def migrate_schema():
         "ALTER TABLE detector_weights ADD COLUMN w_smart_money REAL DEFAULT 1.0",
         "ALTER TABLE detector_weights ADD COLUMN w_mom_quality REAL DEFAULT 1.0",
         "ALTER TABLE detector_weights ADD COLUMN w_regime REAL DEFAULT 1.0",
+        "ALTER TABLE equity_curve ADD COLUMN cph25_equity_sek REAL DEFAULT 0",
     ]
     with _conn() as conn:
         for sql in migrations:
@@ -264,16 +265,17 @@ def upsert_equity(data: dict):
         conn.execute("""
             INSERT INTO equity_curve
               (snap_date, total_equity_sek, us_equity_sek, omx30_equity_sek,
-               dax_equity_sek, commodities_sek, forex_sek,
+               cph25_equity_sek, dax_equity_sek, commodities_sek, forex_sek,
                open_positions, trades_today)
             VALUES
               (:snap_date, :total_equity_sek, :us_equity_sek, :omx30_equity_sek,
-               :dax_equity_sek, :commodities_sek, :forex_sek,
+               :cph25_equity_sek, :dax_equity_sek, :commodities_sek, :forex_sek,
                :open_positions, :trades_today)
             ON CONFLICT(snap_date) DO UPDATE SET
               total_equity_sek = excluded.total_equity_sek,
               us_equity_sek    = excluded.us_equity_sek,
               omx30_equity_sek = excluded.omx30_equity_sek,
+              cph25_equity_sek = excluded.cph25_equity_sek,
               dax_equity_sek   = excluded.dax_equity_sek,
               commodities_sek  = excluded.commodities_sek,
               forex_sek        = excluded.forex_sek,
