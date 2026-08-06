@@ -100,6 +100,56 @@ def init_db():
     conn.commit()
     conn.close()
 
+# ── Saxo API Integration ──────────────────────────────────────────
+TOKEN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'saxo_token.json')
+SIM_BASE = 'https://gateway.saxobank.com/sim/openapi/'
+
+def _load_saxo_token():
+    """Load access token from saxo_token.json if valid."""
+    import time as _time
+    if not os.path.exists(TOKEN_FILE):
+        return None
+    try:
+        with open(TOKEN_FILE) as f:
+            data = json.load(f)
+        token = data.get('access_token', '')
+        obtained = float(data.get('obtained_at', 0))
+        expires_in = int(data.get('expires_in', 1200))
+        if _time.time() > obtained + expires_in - 60:
+            return None  # expired
+        return token
+    except Exception:
+        return None
+
+def _saxo_headers(token):
+    return {'Authorization': f'Bearer {token}'}
+
+def _saxo_get_balance(token):
+    """Get live account balance from Saxo."""
+    import requests
+    try:
+        r = requests.get(SIM_BASE + 'port/v1/balances/me',
+                        headers=_saxo_headers(token), timeout=10)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return None
+
+def _saxo_get_positions(token):
+    """Get live open positions from Saxo."""
+    import requests
+    try:
+        r = requests.get(SIM_BASE + 'port/v1/positions/me',
+                        headers=_saxo_headers(token),
+                        params={'FieldGroups': 'PositionBase,PositionView,DisplayAndFormat'},
+                        timeout=10)
+        if r.status_code == 200:
+            return r.json().get('Data', [])
+    except Exception:
+        pass
+    return []
+
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
@@ -495,12 +545,12 @@ HTML_CONTENT = """<!DOCTYPE html>
                     <thead>
                         <tr>
                             <th>Ticker</th>
-                            <th>Market</th>
+                            <th>Exchange</th>
                             <th>Shares</th>
                             <th>Entry Price</th>
                             <th>Entry Date</th>
-                            <th>Entry Score</th>
-                            <th>D1-D5 Breakdown</th>
+                            <th>P&L</th>
+                            <th>Description</th>
                         </tr>
                     </thead>
                     <tbody><tr><td colspan="7" class="empty-state">Loading...</td></tr></tbody>
@@ -530,7 +580,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
 
         <footer>
-            ATOS v1 &middot; Saxo SIM (Paper Money) &middot; localhost:8070
+            ATOS v3 &middot; Saxo SIM (Live) &middot; localhost:8070
         </footer>
     </div>
 
@@ -652,21 +702,26 @@ HTML_CONTENT = """<!DOCTYPE html>
             try {
                 document.getElementById('lastUpdated').textContent = 'Updating...';
 
-                const [summary, equity, open, closed, signals, weights] = await Promise.all([
+                const [summary, equity, open, closed, signals, weights, livePositions] = await Promise.all([
                     fetch('/api/summary').then(r => r.json()).catch(e => ({ error: e.message })),
                     fetch('/api/equity').then(r => r.json()).catch(e => ({ data: [] })),
                     fetch('/api/trades/open').then(r => r.json()).catch(e => ({ data: [] })),
                     fetch('/api/trades/closed').then(r => r.json()).catch(e => ({ data: [] })),
                     fetch('/api/signals').then(r => r.json()).catch(e => ({ data: [] })),
-                    fetch('/api/weights').then(r => r.json()).catch(e => ({ current: null }))
+                    fetch('/api/weights').then(r => r.json()).catch(e => ({ current: null })),
+                    fetch('/api/positions/live').then(r => r.json()).catch(e => ({ data: [] }))
                 ]);
 
+                const livePos = (livePositions && livePositions.data) || [];
                 const openData = (open && open.data) || [];
                 const closedData = (closed && closed.data) || [];
                 const signalData = (signals && signals.data) || [];
+                
+                // Use live position count if available, otherwise DB count
+                const positionCount = livePos.length > 0 ? livePos.length : openData.length;
 
                 if (summary && !summary.error) {
-                    updateKPIs(summary, openData.length);
+                    updateKPIs(summary, positionCount);
                 }
                 
                 if (equity && equity.data && equity.data.length > 0) {
@@ -676,7 +731,16 @@ HTML_CONTENT = """<!DOCTYPE html>
                 }
 
                 updateWeights(weights ? weights.current : null);
-                updateTables(openData, closedData, signalData);
+                
+                // Update tables - use live positions if available
+                if (livePos.length > 0) {
+                    updateLivePositions(livePositions);
+                } else {
+                    updateTables(openData, closedData, signalData);
+                }
+                // Always update signals and closed trades from DB
+                updateSignalsTable(signalData);
+                updateClosedTradesTable(closedData);
 
                 document.getElementById('lastUpdated').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
             } catch (err) {
@@ -688,16 +752,26 @@ HTML_CONTENT = """<!DOCTYPE html>
         function updateKPIs(data, openCount) {
             if (!data) return;
             const eq = data.total_equity;
-            document.getElementById('kpiEquity').textContent = formatNumber(eq) + ' SEK';
+            const currency = data.currency || 'SEK';
+            document.getElementById('kpiEquity').textContent = formatNumber(eq) + ' ' + currency;
             
-            const pct = eq ? ((eq - 10000) / 10000) * 100 : 0;
+            const startingCapital = 10000;
+            const pct = eq ? ((eq - startingCapital) / startingCapital) * 100 : 0;
             const sign = pct >= 0 ? '+' : '';
             const cls = pct >= 0 ? 'text-success' : 'text-danger';
-            document.getElementById('kpiEquitySub').innerHTML = `<span class="${cls}">${sign}${formatNumber(pct)}%</span> from start (10,000 SEK)`;
+            
+            let subText = `<span class="${cls}">${sign}${formatNumber(pct)}%</span>`;
+            if (data.cash_balance !== null && data.cash_balance !== undefined) {
+                subText += ` | Cash: ${formatNumber(data.cash_balance)} ${currency}`;
+            }
+            if (data.source === 'saxo_live') {
+                subText += ' | <span style="color: var(--success-color)">● LIVE</span>';
+            }
+            document.getElementById('kpiEquitySub').innerHTML = subText;
             
             const pnl = data.today_pnl || 0;
             const pnlCls = pnl >= 0 ? 'text-success' : 'text-danger';
-            document.getElementById('kpiTodayPnl').innerHTML = `<span class="${pnlCls}">${pnl > 0 ? '+' : ''}${formatNumber(pnl)} SEK</span>`;
+            document.getElementById('kpiTodayPnl').innerHTML = `<span class="${pnlCls}">${pnl > 0 ? '+' : ''}${formatNumber(pnl)} ${currency}</span>`;
             
             document.getElementById('kpiPositions').textContent = `${openCount}/10`;
             
@@ -733,6 +807,75 @@ HTML_CONTENT = """<!DOCTYPE html>
                 `;
             });
             container.innerHTML = html;
+        }
+
+        function updateLivePositions(liveData) {
+            const openBody = document.querySelector('#openPositionsTable tbody');
+            const positions = (liveData && liveData.data) || [];
+            
+            if (positions.length === 0) {
+                // Don't overwrite if we already have DB positions
+                return;
+            }
+            
+            openBody.innerHTML = positions.map(p => {
+                const pnlCls = p.pnl >= 0 ? 'text-success' : 'text-danger';
+                return `
+                    <tr>
+                        <td><strong>${p.ticker}</strong></td>
+                        <td>${p.market_group}</td>
+                        <td>${p.shares}</td>
+                        <td>${p.entry_price ? p.entry_price.toFixed(2) : '-'}</td>
+                        <td>${p.entry_date ? p.entry_date.substring(0, 10) : '-'}</td>
+                        <td class="${pnlCls}">${p.pnl >= 0 ? '+' : ''}${formatNumber(p.pnl)} ${p.currency}</td>
+                        <td>${p.description}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function updateSignalsTable(signals) {
+            const sigBody = document.querySelector('#signalsTable tbody');
+            if (!signals || signals.length === 0) {
+                sigBody.innerHTML = '<tr><td colspan="6" class="empty-state">No signals today</td></tr>';
+            } else {
+                sigBody.innerHTML = signals.map(s => {
+                    const badgeClass = s.action === 'BUY' ? 'buy' : s.action === 'EXIT' ? 'exit' : 'blocked';
+                    return `
+                        <tr>
+                            <td><span class="badge ${badgeClass}">${s.action}</span></td>
+                            <td><strong>${s.ticker}</strong></td>
+                            <td>${s.market_group}</td>
+                            <td>${s.final_score ? s.final_score.toFixed(2) : '-'}</td>
+                            <td>${generateScorePills(s.d1_trend, s.d2_momentum, s.d3_breakout, s.d4_mean_revert, s.d5_volume)}</td>
+                            <td>${s.block_reason || '-'}</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+        }
+
+        function updateClosedTradesTable(closed) {
+            const histBody = document.querySelector('#tradeHistoryTable tbody');
+            if (!closed || closed.length === 0) {
+                histBody.innerHTML = '<tr><td colspan="8" class="empty-state">No closed trades yet</td></tr>';
+            } else {
+                histBody.innerHTML = closed.map(t => {
+                    const pnlCls = t.pnl_sek >= 0 ? 'text-success' : 'text-danger';
+                    return `
+                        <tr>
+                            <td><strong>${t.ticker}</strong></td>
+                            <td>${t.market_group}</td>
+                            <td>${t.entry_date}</td>
+                            <td>${t.exit_date}</td>
+                            <td>${t.shares}</td>
+                            <td class="${pnlCls}">${t.pnl_sek > 0 ? '+' : ''}${formatNumber(t.pnl_sek)}</td>
+                            <td>${t.exit_reason || '-'}</td>
+                            <td>${generateScorePills(t.d1_trend, t.d2_momentum, t.d3_breakout, t.d4_mean_revert, t.d5_volume)}</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
         }
 
         function updateTables(open, closed, signals) {
@@ -837,14 +980,33 @@ class DashboardHandler(BaseHTTPRequestHandler):
             cursor = conn.cursor()
 
             if path == '/api/summary':
-                # Basic calculations
-                cursor.execute("SELECT total_equity_sek FROM equity_curve ORDER BY snap_date DESC LIMIT 1")
-                eq_row = cursor.fetchone()
-                total_equity = eq_row['total_equity_sek'] if eq_row else 10000.0
+                # Try live Saxo balance first
+                saxo_token = _load_saxo_token()
+                live_equity = None
+                live_pnl = None
+                live_cash = None
+                live_currency = 'EUR'
+                if saxo_token:
+                    balance = _saxo_get_balance(saxo_token)
+                    if balance:
+                        live_equity = balance.get('TotalValue')
+                        live_cash = balance.get('CashBalance')
+                        live_pnl = balance.get('UnrealizedPositionsValue', 0)
+                        live_currency = balance.get('Currency', 'EUR')
 
+                # Fallback to DB equity
+                if live_equity is None:
+                    cursor.execute("SELECT total_equity_sek FROM equity_curve ORDER BY snap_date DESC LIMIT 1")
+                    eq_row = cursor.fetchone()
+                    live_equity = eq_row['total_equity_sek'] if eq_row else 10000.0
+
+                # DB-based P&L for today (closed trades)
                 cursor.execute("SELECT SUM(pnl_sek) as tpnl FROM trades WHERE exit_date LIKE ?", (datetime.now().strftime('%Y-%m-%d') + '%',))
                 tpnl_row = cursor.fetchone()
-                today_pnl = tpnl_row['tpnl'] if tpnl_row and tpnl_row['tpnl'] else 0.0
+                db_today_pnl = tpnl_row['tpnl'] if tpnl_row and tpnl_row['tpnl'] else 0.0
+
+                # Use live unrealized P&L if available, add to closed P&L
+                total_today_pnl = db_today_pnl + (live_pnl if live_pnl else 0)
 
                 cursor.execute("SELECT COUNT(*) as cnt, SUM(CASE WHEN was_profitable = 1 THEN 1 ELSE 0 END) as wins FROM trades WHERE exit_date IS NOT NULL")
                 stats_row = cursor.fetchone()
@@ -859,11 +1021,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 profit_factor = (gp / gl) if gl > 0 else (gp if gp > 0 else 0)
 
                 self.send_json({
-                    "total_equity": total_equity,
-                    "today_pnl": today_pnl,
+                    "total_equity": live_equity,
+                    "today_pnl": total_today_pnl,
                     "trades_count": trades_count,
                     "win_rate": win_rate,
-                    "profit_factor": profit_factor
+                    "profit_factor": profit_factor,
+                    "cash_balance": live_cash,
+                    "currency": live_currency,
+                    "source": "saxo_live" if saxo_token else "database"
                 })
 
             elif path == '/api/equity':
@@ -891,6 +1056,44 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 cursor.execute("SELECT * FROM detector_weights ORDER BY id DESC LIMIT 1")
                 current = cursor.fetchone()
                 self.send_json({"current": dict(current) if current else None})
+
+            elif path == '/api/positions/live':
+                saxo_token = _load_saxo_token()
+                if saxo_token:
+                    positions = _saxo_get_positions(saxo_token)
+                    formatted = []
+                    for p in positions:
+                        disp = p.get('DisplayAndFormat', {})
+                        pbase = p.get('PositionBase', {})
+                        pview = p.get('PositionView', {})
+                        # Derive market from Saxo symbol suffix
+                        sym = disp.get('Symbol', '?')
+                        if ':xome' in sym:
+                            mkt = 'OMX30'
+                        elif ':xams' in sym:
+                            mkt = 'EU'
+                        elif ':xnas' in sym or ':xnys' in sym:
+                            mkt = 'US'
+                        elif ':xetr' in sym:
+                            mkt = 'DAX'
+                        else:
+                            mkt = disp.get('Currency', '?')
+                        formatted.append({
+                            'ticker': sym,
+                            'description': disp.get('Description', '?'),
+                            'market_group': mkt,
+                            'shares': pbase.get('Amount', 0),
+                            'entry_price': pbase.get('OpenPrice', 0),
+                            'entry_date': pbase.get('ExecutionTimeOpen', '?'),
+                            'current_price': pview.get('CurrentPrice', 0),
+                            'pnl': pview.get('ProfitLossOnTrade', 0),
+                            'pnl_pct': pview.get('ProfitLossOnTradeInPercentage', 0),
+                            'currency': disp.get('Currency', '?'),
+                            'market_value': pview.get('MarketValue', 0),
+                        })
+                    self.send_json({'data': formatted, 'source': 'saxo_live'})
+                else:
+                    self.send_json({'data': [], 'source': 'unavailable', 'error': 'Token expired or missing'})
 
             else:
                 self.send_error(404)

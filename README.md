@@ -1,6 +1,6 @@
 # ATOS — Algorithmic Trading Operating System
 ## Agent Handover & Project State Document
-### Last Updated: 2026-08-06 13:18 PKT | Updated by: Agent #4 (Kwaseem session)
+### Last Updated: 2026-08-06 14:30 PKT | Updated by: Agent #5 (Lenovo session)
 
 ---
 
@@ -46,7 +46,7 @@ Dashboard:  http://localhost:8070                     ← localhost only (no web
 
 ---
 
-## 3. Current System State — 2026-08-06 13:18 PKT
+## 3. Current System State — 2026-08-06 14:30 PKT
 
 ### ✅ WORKING RIGHT NOW
 | What | How | Notes |
@@ -59,19 +59,20 @@ Dashboard:  http://localhost:8070                     ← localhost only (no web
 | **6-Stage Validator** | `atos/validator.py` | 14 Monte Carlo robustness tests, walk-forward, correlation check |
 | **Strategy Monitor** | `atos/strategy_monitor.py` | Weekly reviews, auto-disable on 5 consecutive losses / DD>10% |
 | **RL Reward Environment** | `custom_reward_env.py` | Commission 0.05%, ATR slippage, churning penalty, regime shaping |
-| **Dashboard v2** | `py -3 -X utf8 atos_server.py` | http://localhost:8070 — 8 detectors, regime badges, color-coded weights |
+| **Dashboard v3 (LIVE)** | `py -3 -X utf8 atos_dashboard.py` | http://localhost:8070 — **LIVE Saxo positions, real balance, 🟢 LIVE indicator** |
 | **Trailing stop losses** | `atos_runner.py` + `atos/risk.py` | Dynamic 2×ATR from peak price |
-| 4 open positions | Synced from Saxo SIM | PRX.AS, NIBE-B.ST, HEXA-B.ST, HM-B.ST |
-| Active DB | `data/atos_live.db` | v2 schema migrated, 8-detector weights |
+| **Saxo token (24h)** | `saxo_token.json` | ✅ Valid until Aug 7 14:16 — paste new 24h token from dev portal when expired |
+| 4 open positions | Live from Saxo SIM API | PRX:xams (EU), NIBE_B:xome (OMX30), HEXAb:xome (OMX30), HMb:xome (OMX30) |
+| Account balance | **€999,979.67 EUR** | Cash: €999,547.33 — 4 positions in profit (+€402 unrealized) |
+| Active DB | `data/atos.db` | v2 schema migrated, 8-detector weights |
 
-### ⚠️ KNOWN ISSUES — MUST FIX BEFORE FIRST CYCLE
+### ⚠️ KNOWN ISSUES — REMAINING
 | Issue | Cause | Fix |
 |---|---|---|
-| Saxo token **EXPIRED** | Last used >24h ago | Run `py -3 saxo_auth_auto.py` before any trading |
 | `files/` directory read-only for non-SEO users | NTFS ownership by user SEO | **Run `fix_permissions.bat` as Administrator** |
 | ATOS universe tickers not fully mapped to Saxo UICs | `lookup_instruments.py` never run for new tickers | Run `py -3 lookup_instruments.py` |
-| `atos_runner.py` never completed a full cycle | No daily run has happened yet | Fix auth first, then run `py -3 -X utf8 run_atos.py` |
-| `data/atos.db` WAL lock | Journal files owned by user Kashif | Admin fix → delete WAL files → rename `atos_live.db` → `atos.db` |
+| `atos_runner.py` never completed a full cycle | No daily run has happened yet | Run `py -3 -X utf8 run_atos.py` |
+| 24h token needs manual renewal | No refresh token with dev portal tokens | Paste new token daily, or use `py -3 saxo_auth_auto.py` for auto-refresh |
 
 ---
 
@@ -168,11 +169,12 @@ git push origin main
 | `atos_runner.py` | Main daily orchestrator — `run_cycle()` | +trailing stop checks, +8-detector logging |
 
 ### Dashboard & Server
-| File | Purpose | v2 Changes |
+| File | Purpose | v3 Changes |
 |---|---|---|
-| `atos_server.py` | **USE THIS** — ThreadingHTTPServer @ http://localhost:8070 | **+8 detector pills (D1-D8), +regime badges (BULL/BEAR/SIDEWAYS), +color-coded weight bars, +regime column in all tables** |
-| `atos_dashboard.py` | Old server (buggy — do not use) | — |
+| `atos_dashboard.py` | **USE THIS** — Dashboard @ http://localhost:8070 | **+LIVE Saxo API (positions, balance), +/api/positions/live endpoint, +LIVE indicator, +dynamic currency, +market group detection** |
+| `atos_server.py` | Older ThreadingHTTPServer (DB-only, no live data) | +8 detector pills, +regime badges |
 | `run_atos.py` | Wrapper: token check + atos_runner + skip FTP | — |
+| `start_atos.py` | v3 single launcher: scan + dashboard + Saxo prices | **[NEW] One-file launcher with --scan-only, --dashboard, --market flags** |
 | `atos/dashboard_gen.py` | Legacy static HTML generator | — |
 
 ### Auth & Connectivity
@@ -280,6 +282,7 @@ Commission:        0.08% per trade, min 1 USD (~10.5 SEK)
 | #5 | **risk.py conflated cash and equity** — position costs subtracted from `risk_capital_sek`, causing false daily loss cap triggers and shrinking position sizes after each buy | ✅ FIXED | Agent #4 — split into `available_cash_sek` + `get_total_equity()` |
 | #6 | **Learner crash on NULL detector scores** — 4 imported positions have NULL D1-D5 scores; learner would TypeError when processing closed trades | ✅ FIXED | Agent #4 — added `_safe_score()` guard |
 | #7 | **State file discrepancies** — `daily_state.json` had equity=1,000,000 (100× wrong from Saxo's €100k sim balance) | ✅ FIXED | Agent #4 — reset to 10,000 SEK |
+| #8 | **Dashboard showed DB-only data (10,000 SEK) instead of live Saxo balance (€999K)** — `/api/summary` hardcoded 10,000 fallback, no live positions shown, no Saxo API calls from dashboard | ✅ FIXED | Agent #5 — added live Saxo API integration: `/api/positions/live` endpoint, real-time balance/positions, `🟢 LIVE` indicator, dynamic currency display |
 
 ---
 
@@ -311,10 +314,11 @@ Redirect URI: `https://localhost/redirect` (already registered).
 
 - [x] **P0 — Fix Bug #5** (risk.py equity/cash conflation) ✅ DONE by Agent #4
 - [x] **P7 — Upgrade ATOS to v2** (8 detectors, regime, trailing stops, smart learner) ✅ DONE by Agent #4
+- [x] **P3 — Refresh Saxo token** ✅ DONE by Agent #5 — 24h token saved, all 5 API endpoints verified live
+- [x] **P9 — Fix Bug #8** (dashboard not showing live data) ✅ DONE by Agent #5 — live Saxo API integration
 - [ ] **P1 — Fix permissions** (ADMIN needed)
   Right-click `fix_permissions.bat` → Run as Administrator
-- [ ] **P2 — Register OAuth redirect URI** in Saxo developer portal
-- [ ] **P3 — Refresh expired Saxo token** → `py -3 saxo_auth_auto.py`
+- [ ] **P2 — Register OAuth redirect URI** in Saxo developer portal (for auto-refresh PKCE flow)
 - [ ] **P4 — Map ATOS universe to Saxo UICs** → `py -3 lookup_instruments.py`
 - [ ] **P5 — Run first full daily cycle** → `py -3 -X utf8 run_atos.py`
 - [ ] **P6 — Set up Task Scheduler** (ADMIN needed) — see §13
@@ -371,6 +375,8 @@ Terminal: Use PowerShell
 ## 16. Git Commit History
 
 ```
+PENDING  agent#5: Bug #8 fix — live Saxo API in dashboard, 24h token, live positions/balance
+6de928d  agent#5: README updated for ATOS v3
 106ccf1  agent#4: ATOS v3 — Strategy Factory + 6-Stage Validation Pipeline (1,125 lines)
 102965b  agent#4: CustomRewardEnv — RL reward wrapper (commission, slippage, churning, Optuna)
 d0f5671  agent#4: README v2 dashboard docs, roadmap 100% complete
@@ -396,8 +402,9 @@ ac35a61  Add read-only strategy dashboard
 | Agent #2 | 2026-08-03/04 | Kashif | Added local dashboard server, auto-OAuth, run_atos.py wrapper, placed 4 test orders on Saxo SIM via SMA crossover, fixed JS bugs |
 | Agent #3 | 2026-08-04 | SEO | Fixed dashboard "---" bug: ThreadingHTTPServer, fresh `atos_live.db`, synced 4 Saxo positions, multi-agent README protocol |
 | Agent #4 | 2026-08-04/06 | Kwaseem | **ATOS v2+v3 MAJOR UPGRADE**: v2: 8 detectors, regime, trailing stops, dashboard v2. v3: **Strategy Factory** (6 strategies: DetectorScore, DualEMA, MeanReversion, BreakoutVol, MomentumAccel, SmartMoney), **walk-forward backtester**, **6-stage validator** (14 Monte Carlo robustness tests), **weekly strategy monitor** (auto-disable), **consensus voting engine**, **CustomRewardEnv** (RL reward wrapper for PPO training). 2,200+ insertions across 20 files. All tested and pushed. |
+| Agent #5 | 2026-08-06 | Lenovo | **Live Saxo integration**: Saved 24h token (verified all 5 API endpoints), **Bug #8 fix** — dashboard now shows LIVE Saxo positions (4 stocks), real account balance (€999K EUR), unrealized P&L, dynamic currency, 🟢 LIVE indicator. Added `/api/positions/live` endpoint. Market group auto-detection from Saxo symbols. |
 
-**Next agent: You are Agent #5. Read §12 for your task list. Authenticate with Saxo (`py -3 saxo_auth_auto.py`) and run the first cycle.**
+**Next agent: You are Agent #6. Read §12 for your task list. Run the first full trading cycle (`py -3 -X utf8 run_atos.py`).**
 
 ---
 
