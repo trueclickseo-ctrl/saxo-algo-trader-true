@@ -1,8 +1,22 @@
 # ATOS — Algorithmic Trading Operating System
 ## Agent Handover & Project State Document
-### Last Updated: 2026-08-06 14:30 PKT | Updated by: Agent #5 (Lenovo session)
+### Last Updated: 2026-08-06 | Updated by: Agent #6 (Kwaseem — pre-live audit + fixes)
 
 ---
+
+> ## 🔴 SECURITY — ACT BEFORE NEXT PUSH
+>
+> **`config/deploy.json` (FTP host/user/password for namazic.com) was committed in
+> the very first commit (`06ffbc9`) and remained tracked.** Agent #6 removed it from
+> the index (`git rm --cached`) and gitignored it, but **it is still in git history**,
+> and this repo pushes to GitHub. Required follow-up:
+> 1. **Rotate the FTP password now** in the hosting panel — assume it is compromised.
+> 2. Purge it from history (coordinated, rewrites history): `git filter-repo --path config/deploy.json --invert-paths` then force-push, and have every agent re-clone.
+> 3. Never re-add the file (already gitignored).
+>
+> Also tracked-in-git and better untracked in a **coordinated** step (a plain
+> `git rm --cached` will delete another machine's copy on pull): `data/atos_live.db`,
+> `data/*_state.json`, `data/risk_capital.json`. Do NOT `git add -A` state/DB files.
 
 > ## 🤖 MULTI-AGENT PROTOCOL — READ FIRST
 >
@@ -70,8 +84,9 @@ Dashboard:  http://localhost:8070                     ← localhost only (no web
 | Issue | Cause | Fix |
 |---|---|---|
 | `files/` directory read-only for non-SEO users | NTFS ownership by user SEO | **Run `fix_permissions.bat` as Administrator** |
-| ATOS universe tickers not fully mapped to Saxo UICs | `lookup_instruments.py` never run for new tickers | Run `py -3 lookup_instruments.py` |
-| `atos_runner.py` never completed a full cycle | No daily run has happened yet | Run `py -3 -X utf8 run_atos.py` |
+| ~29 universe tickers unmapped (all Commodities + Forex + ~22 US names); several DAX rows mapped to wrong exchange/currency | `lookup_instruments.py` incomplete / best-guess rows | Re-run `py -3 lookup_instruments.py`. Until then the BUY path safely **skips** unmapped and currency-mismatched tickers (Bug #10/#15) |
+| `run_cycle()` cycle-crash + phantom trades fixed in code, but **no full LIVE cycle has been run yet** | Fixes are unit/smoke-tested only (Agent #6 did not place orders) | Run `py -3 -X utf8 run_atos.py` with a valid token and watch the first cycle |
+| Consensus gate is strict (≥3/6) — expect few/no BUYs on quiet days | By design (matches README claim) | Toggle via `REQUIRE_CONSENSUS`/`CONSENSUS_MIN_AGREEMENT` in `atos_runner.py` |
 | 24h token needs manual renewal | No refresh token with dev portal tokens | Paste new token daily, or use `py -3 saxo_auth_auto.py` for auto-refresh |
 
 ---
@@ -283,6 +298,15 @@ Commission:        0.08% per trade, min 1 USD (~10.5 SEK)
 | #6 | **Learner crash on NULL detector scores** — 4 imported positions have NULL D1-D5 scores; learner would TypeError when processing closed trades | ✅ FIXED | Agent #4 — added `_safe_score()` guard |
 | #7 | **State file discrepancies** — `daily_state.json` had equity=1,000,000 (100× wrong from Saxo's €100k sim balance) | ✅ FIXED | Agent #4 — reset to 10,000 SEK |
 | #8 | **Dashboard showed DB-only data (10,000 SEK) instead of live Saxo balance (€999K)** — `/api/summary` hardcoded 10,000 fallback, no live positions shown, no Saxo API calls from dashboard | ✅ FIXED | Agent #5 — added live Saxo API integration: `/api/positions/live` endpoint, real-time balance/positions, `🟢 LIVE` indicator, dynamic currency display |
+| #9 | **`run_cycle()` crashed every run** — `atos_runner.py` read `.regime` off the 5-field `Decision` namedtuple, which has no such attribute → `AttributeError` at step 9 (after learning/equity were already written). No cycle ever completed. | ✅ FIXED | Agent #6 — safe `getattr(..., 'regime', 'unknown')` |
+| #10 | **Phantom DB positions** — BUY `insert_trade` (and EXIT `close_trade`/`record_fill`) ran unconditionally, even when the Saxo order was skipped (unmapped ticker) or failed. DB diverged from Saxo. | ✅ FIXED | Agent #6 — DB writes now gated on `order_ok`; failed sells keep the position open for retry |
+| #11 | **Consensus engine never enforced** — the live path (`run_atos.py`→`atos_runner.run_cycle`) used the 5-detector weighted score only; `consensus_evaluate` (≥3/6 strategies) was defined but never called in any order path. | ✅ FIXED | Agent #6 — consensus gate wired into the BUY path (`REQUIRE_CONSENSUS`, `CONSENSUS_MIN_AGREEMENT=3`) |
+| #12 | **Equity mixed currencies** — `risk.get_total_equity()` summed `shares×entry_price` across SEK/EUR/USD with no FX; PRX.AS (EUR) counted at 1/11th value. Fed the daily-loss-cap and P&L%. | ✅ FIXED | Agent #6 — `_position_value_sek()` converts each position by its instrument-map currency |
+| #13 | **Order placement had no timeout, dead retry code** — `place_market_order` used a raw `requests.post` with no timeout (hang risk); `_request_with_retry` was never called. | ✅ FIXED | Agent #6 — `timeout=30` on the order POST (no retry, to avoid duplicate fills); reads routed through `_request_with_retry` |
+| #14 | **Non-atomic state writes** — `risk.py`/`kill_switch.py`/`strategy_monitor.py` overwrote JSON in place; a dashboard read mid-write could hit a truncated file. | ✅ FIXED | Agent #6 — temp-file + `os.replace()` atomic writes |
+| #15 | **Wrong-currency instrument mappings** (e.g. `SAP.DE→USD NYSE`, `ALV.DE→CAD`) could trade the wrong listing. | ✅ MITIGATED | Agent #6 — BUY path skips any ticker whose mapped currency ≠ its market-group currency. **Still needs a proper UIC re-lookup for DAX.** |
+| #16 | **Learner processed wrong trades** — `run_learning_pass` sliced a newest-first list by processed-count, re-learning old trades and skipping new ones. | ✅ FIXED | Agent #6 — reversed to oldest-first before slicing |
+| — | **`test_order.py` placed a real order with zero gating.** | ✅ FIXED | Agent #6 — kill-switch check + interactive confirmation |
 
 ---
 
@@ -403,8 +427,9 @@ ac35a61  Add read-only strategy dashboard
 | Agent #3 | 2026-08-04 | SEO | Fixed dashboard "---" bug: ThreadingHTTPServer, fresh `atos_live.db`, synced 4 Saxo positions, multi-agent README protocol |
 | Agent #4 | 2026-08-04/06 | Kwaseem | **ATOS v2+v3 MAJOR UPGRADE**: v2: 8 detectors, regime, trailing stops, dashboard v2. v3: **Strategy Factory** (6 strategies: DetectorScore, DualEMA, MeanReversion, BreakoutVol, MomentumAccel, SmartMoney), **walk-forward backtester**, **6-stage validator** (14 Monte Carlo robustness tests), **weekly strategy monitor** (auto-disable), **consensus voting engine**, **CustomRewardEnv** (RL reward wrapper for PPO training). 2,200+ insertions across 20 files. All tested and pushed. |
 | Agent #5 | 2026-08-06 | Lenovo | **Live Saxo integration**: Saved 24h token (verified all 5 API endpoints), **Bug #8 fix** — dashboard now shows LIVE Saxo positions (4 stocks), real account balance (€999K EUR), unrealized P&L, dynamic currency, 🟢 LIVE indicator. Added `/api/positions/live` endpoint. Market group auto-detection from Saxo symbols. |
+| Agent #6 | 2026-08-06 | Kwaseem | **Pre-live audit + fixes.** Found & fixed the cycle-crash (`.regime`), phantom-DB-trade writes, the unenforced consensus engine (now gated ≥3/6 at order time), mixed-currency equity (FX by instrument currency), missing order timeout + dead retry code, non-atomic state writes, wrong-currency mapping guard, learner ordering bug, and the ungated `test_order.py`. Flagged the committed FTP password (`config/deploy.json`) — untracked it; **rotation + history purge still required.** All fixes compile + smoke-test; **no live cycle run** (no orders placed). See Bugs #9–#16. |
 
-**Next agent: You are Agent #6. Read §12 for your task list. Run the first full trading cycle (`py -3 -X utf8 run_atos.py`).**
+**Next agent: You are Agent #7. FIRST: rotate the FTP password & purge `config/deploy.json` from history (see 🔴 SECURITY at top). THEN run the first full LIVE cycle (`py -3 -X utf8 run_atos.py`) with a valid token and confirm it completes without crashing and that DB positions match Saxo. Also re-run `lookup_instruments.py` to fix DAX/commodity/forex UICs.**
 
 ---
 

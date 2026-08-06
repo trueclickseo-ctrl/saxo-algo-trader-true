@@ -28,6 +28,16 @@ DAILY_STATE_FILE = os.path.join(os.path.dirname(__file__), "data", "daily_state.
 RISK_CAPITAL_FILE = os.path.join(os.path.dirname(__file__), "data", "risk_capital.json")
 
 
+def _atomic_write_json(path: str, data: dict):
+    """Write JSON via temp file + os.replace() so a concurrent reader (the
+    dashboard) never observes a truncated, half-written state file."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)
+
+
 def kill_switch_active() -> bool:
     return os.path.exists(KILL_SWITCH_FILE)
 
@@ -48,8 +58,7 @@ def get_day_start_equity(current_equity: float) -> float:
 
     if state.get("date") != today:
         state = {"date": today, "day_start_equity": current_equity}
-        with open(DAILY_STATE_FILE, "w") as f:
-            json.dump(state, f, indent=2)
+        _atomic_write_json(DAILY_STATE_FILE, state)
 
     return state["day_start_equity"]
 
@@ -71,8 +80,7 @@ def get_risk_capital() -> float:
     os.makedirs(os.path.dirname(RISK_CAPITAL_FILE), exist_ok=True)
     if not os.path.exists(RISK_CAPITAL_FILE):
         state = {"risk_capital": config.STARTING_CAPITAL}
-        with open(RISK_CAPITAL_FILE, "w") as f:
-            json.dump(state, f, indent=2)
+        _atomic_write_json(RISK_CAPITAL_FILE, state)
         return state["risk_capital"]
 
     with open(RISK_CAPITAL_FILE) as f:
@@ -90,6 +98,5 @@ def record_fill(cash_delta_sek: float) -> float:
     """
     current = get_risk_capital()
     new_balance = current + cash_delta_sek
-    with open(RISK_CAPITAL_FILE, "w") as f:
-        json.dump({"risk_capital": new_balance}, f, indent=2)
+    _atomic_write_json(RISK_CAPITAL_FILE, {"risk_capital": new_balance})
     return new_balance

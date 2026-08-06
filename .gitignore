@@ -9,6 +9,8 @@ data/atos_risk_state.json    # runtime capital tracker (regenerates)
 
 # ── ATOS v1 — large/generated files ──────────────────────────────
 data/atos.db                 # SQLite database (large, local only)
+data/atos_live.db            # active SQLite DB (local runtime state, not history)
+config/deploy.json           # FTP creds — untracked; ROTATE + purge from history
 dashboard/                   # generated HTML (uploaded to namazic.com)
 
 # Python

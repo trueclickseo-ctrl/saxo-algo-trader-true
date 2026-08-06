@@ -36,9 +36,12 @@ class StrategyMonitor:
         return {'strategies': {}, 'last_weekly_review': ''}
     
     def _save_state(self):
+        # Atomic write so a concurrent reader never sees a truncated file.
         os.makedirs(os.path.dirname(MONITOR_FILE), exist_ok=True)
-        with open(MONITOR_FILE, 'w') as f:
+        tmp = f"{MONITOR_FILE}.tmp.{os.getpid()}"
+        with open(tmp, 'w') as f:
             json.dump(self._state, f, indent=2, default=str)
+        os.replace(tmp, MONITOR_FILE)
     
     def record_trade(self, strategy_name: str, pnl: float, was_profitable: bool):
         """Record a closed trade for monitoring."""

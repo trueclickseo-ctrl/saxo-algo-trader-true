@@ -138,14 +138,18 @@ def run_learning_pass():
     Returns summary of what changed.
     """
     before = db.get_current_weights()
-    closed = db.get_recent_closed_trades(n=200)
+    # get_recent_closed_trades returns newest-first (ORDER BY exit_date DESC);
+    # reverse to oldest-first so slicing by the processed-trade count picks up
+    # genuinely NEW trades, not the most recent ones (which would re-learn old
+    # trades and skip new ones).
+    closed = list(reversed(db.get_recent_closed_trades(n=200)))
 
     num_trades_before = before.get("num_trades", 0)
     new_trades = [t for t in closed
                   if t.get("was_profitable") is not None]
 
     # Only process trades that haven't been learned from yet
-    # (simple heuristic: process trades beyond the current count)
+    # (process trades beyond the count already folded into the weights)
     unprocessed = new_trades[num_trades_before:]
 
     if not unprocessed:

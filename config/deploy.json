@@ -1,9 +1,0 @@
-{
-  "_comment": "FTP credentials for dashboard upload. DO NOT commit this file. Add config/deploy.json to .gitignore.",
-  "ftp_host": "195.35.39.151",
-  "ftp_port": 21,
-  "ftp_user": "u104700239.namazic.com",
-  "ftp_password": "@W2wCQ;>]/vUcw/f",
-  "remote_dir": "/public_html/atos/",
-  "domain_url": "https://namazic.com/atos/"
-}

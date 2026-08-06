@@ -69,21 +69,21 @@ def test_connection() -> dict:
     Calls Saxo's 'who am I' endpoint — the simplest possible test that the
     token is valid and the connection works. Returns basic user info.
     """
-    resp = requests.get(f"{SIM_BASE_URL}/port/v1/users/me", headers=_headers())
+    resp = _request_with_retry("GET", f"{SIM_BASE_URL}/port/v1/users/me", headers=_headers())
     resp.raise_for_status()
     return resp.json()
 
 
 def get_account_info() -> dict:
     """Returns account details, including the AccountKey needed for orders."""
-    resp = requests.get(f"{SIM_BASE_URL}/port/v1/accounts/me", headers=_headers())
+    resp = _request_with_retry("GET", f"{SIM_BASE_URL}/port/v1/accounts/me", headers=_headers())
     resp.raise_for_status()
     return resp.json()
 
 
 def get_positions() -> dict:
     """Returns currently open positions on the SIM account."""
-    resp = requests.get(f"{SIM_BASE_URL}/port/v1/positions/me", headers=_headers())
+    resp = _request_with_retry("GET", f"{SIM_BASE_URL}/port/v1/positions/me", headers=_headers())
     resp.raise_for_status()
     return resp.json()
 
@@ -94,7 +94,7 @@ def get_balances() -> dict:
     CashAvailableForTrading — this is the source of truth for equity/cash,
     not anything computed locally.
     """
-    resp = requests.get(f"{SIM_BASE_URL}/port/v1/balances/me", headers=_headers())
+    resp = _request_with_retry("GET", f"{SIM_BASE_URL}/port/v1/balances/me", headers=_headers())
     resp.raise_for_status()
     return resp.json()
 
@@ -118,7 +118,8 @@ def find_instrument(symbol: str, asset_type: str = "Stock") -> list[dict]:
     listing for the same company name) — you pick the right one by checking
     the 'ExchangeId' / 'CurrencyCode' fields.
     """
-    resp = requests.get(
+    resp = _request_with_retry(
+        "GET",
         f"{SIM_BASE_URL}/ref/v1/instruments",
         headers=_headers(),
         params={"Keywords": symbol, "AssetTypes": asset_type},
@@ -147,7 +148,12 @@ def place_market_order(uic: int, asset_type: str, buy_sell: str, amount: int) ->
         # anything this bot needs to reason about.
         "ManualOrder": False,
     }
-    resp = requests.post(f"{SIM_BASE_URL}/trade/v2/orders", headers=_headers(), json=order)
+    # NOTE: deliberately NOT wrapped in _request_with_retry. Retrying an
+    # order after a timeout risks a duplicate fill (the first request may
+    # have reached Saxo). A hard timeout is still required so a hung
+    # connection can't stall the whole daily cycle indefinitely.
+    resp = requests.post(f"{SIM_BASE_URL}/trade/v2/orders", headers=_headers(),
+                         json=order, timeout=30)
     try:
         resp.raise_for_status()
     except requests.exceptions.HTTPError as e:

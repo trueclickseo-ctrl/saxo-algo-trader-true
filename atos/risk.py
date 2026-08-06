@@ -61,10 +61,25 @@ def _load_state() -> dict:
         return json.load(f)
 
 
+# Market-group → trading currency, used to convert open-position values into
+# SEK for equity. Mirrors _currency_for() in atos_runner.py.
+_MARKET_CURRENCY = {
+    "US Equities": "USD",
+    "Commodities": "USD",
+    "Forex":       "USD",
+    "OMX30":       "SEK",
+    "DAX40":       "EUR",
+}
+
+
 def _save_state(state: dict):
+    """Atomic write: serialize to a temp file, then os.replace() so a
+    concurrent reader (e.g. the dashboard) never sees a half-written file."""
     os.makedirs(os.path.dirname(RISK_STATE_FILE), exist_ok=True)
-    with open(RISK_STATE_FILE, "w") as f:
+    tmp = f"{RISK_STATE_FILE}.tmp.{os.getpid()}"
+    with open(tmp, "w") as f:
         json.dump(state, f, indent=2)
+    os.replace(tmp, RISK_STATE_FILE)
 
 
 def kill_switch_active() -> bool:
@@ -80,17 +95,50 @@ def get_risk_capital() -> float:
     return get_available_cash()
 
 
+def _position_value_sek(open_trades: list[dict]) -> float:
+    """Sum open-position cost basis, converted to SEK by each position's
+    trading currency. Without this, a EUR entry_price (e.g. PRX.AS) and a SEK
+    entry_price get added as if the same unit — silently wrong, not rounding."""
+    try:
+        import fx  # local import: fx pulls in yfinance and is only on the
+                   # runner's sys.path, so keep it out of module import time.
+    except Exception:
+        fx = None
+    # Prefer the instrument's own currency from the map (handles legacy
+    # positions whose stored market_group — e.g. PRX.AS as "EU_OTHER" — isn't
+    # in _MARKET_CURRENCY); fall back to the market-group default, then SEK.
+    imap = {}
+    try:
+        from instrument_map import load_instrument_map
+        imap = load_instrument_map()
+    except Exception:
+        imap = {}
+    total = 0.0
+    for t in open_trades:
+        shares = t.get("shares", 0) or 0
+        price  = t.get("entry_price", 0) or 0
+        ticker = t.get("ticker", "")
+        if ticker in imap:
+            currency = imap[ticker]["currency"]
+        else:
+            currency = _MARKET_CURRENCY.get(t.get("market_group", ""), "SEK")
+        rate = 1.0
+        if fx is not None and currency != "SEK":
+            try:
+                rate = fx.get_rate_to_sek(currency)
+            except Exception:
+                rate = 1.0  # fx already logs; fall back to unconverted
+        total += shares * price * rate
+    return total
+
+
 def get_total_equity(open_trades: list[dict] = None) -> float:
-    """Total equity = available cash + sum(shares * entry_price) for all open positions."""
+    """Total equity = available cash (SEK) + SEK value of all open positions."""
     state = _load_state()
     cash = state.get("available_cash_sek", state.get("risk_capital_sek", STARTING_CAPITAL_SEK))
     if open_trades is None:
         return cash  # no position data available
-    position_value = sum(
-        (t.get("shares", 0) or 0) * (t.get("entry_price", 0) or 0)
-        for t in open_trades
-    )
-    return cash + position_value
+    return cash + _position_value_sek(open_trades)
 
 
 def record_fill(cash_delta_sek: float) -> float:

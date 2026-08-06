@@ -40,7 +40,7 @@ sys.path.insert(0, BASE_DIR)
 from atos import database as db
 from atos.universe import ATOS_UNIVERSE, market_of, MARKET_GROUPS
 from atos.features import add_all
-from atos.decision_engine import scan_universe, BUY_THRESHOLD
+from atos.decision_engine import scan_universe, BUY_THRESHOLD, consensus_evaluate
 from atos.learner import run_learning_pass, format_weight_bar
 from atos.risk import (
     RiskEngine, get_risk_capital, get_available_cash, get_total_equity,
@@ -58,6 +58,14 @@ DEPLOY_CONFIG = os.path.join(BASE_DIR, "config", "deploy.json")
 
 # ── Settings ───────────────────────────────────────────────────────
 HISTORY_DAYS   = 300    # days of history to download (need 200 for EMA200)
+
+# ATOS v3 consensus gate: a BUY candidate (already past the weighted
+# detector score) must also win a multi-strategy quorum before an order is
+# placed. This is the rule the README advertises — enforced here at the
+# point of execution, not merely logged. Set REQUIRE_CONSENSUS = False to
+# fall back to pure detector-score entries.
+REQUIRE_CONSENSUS       = True
+CONSENSUS_MIN_AGREEMENT = 3     # >= 3 of 6 strategies must vote BUY
 ASSET_TYPE_MAP = {      # Saxo asset type per market group
     "US Equities":  "Stock",
     "OMX30":        "Stock",
@@ -305,6 +313,7 @@ def run_cycle():
         pnl_sek = (trade.get("shares", 0) * (price_sek -
                    (trade.get("entry_price", last_price) * rate)) - comm)
 
+        order_ok = False
         try:
             asset_type = ASSET_TYPE_MAP.get(mkt, "Stock")
             # Look up Saxo UIC from existing instrument map where available
@@ -316,21 +325,29 @@ def run_cycle():
                                                int(trade.get("shares", 0)))
                 order_ok = True
             else:
-                order_ok = False
-                print(f"  [SKIP EXIT] {ticker} not in instrument_map.csv")
+                print(f"  [SKIP EXIT] {ticker} not in instrument_map.csv — position kept open")
         except Exception as e:
-            order_ok = False
-            print(f"  EXIT order failed {ticker}: {e}")
+            print(f"  EXIT order failed {ticker}: {e} — position kept open")
 
-        db.close_trade(trade["id"], last_price, exit_reason, pnl_sek, comm)
-        record_fill(trade.get("shares", 0) * price_sek)
-
-        todays_actions.append({
-            "action": "EXIT", "ticker": ticker, "market_group": mkt,
-            "score": decision.score if decision else 0,
-            "shares": trade.get("shares", 0),
-            "price": last_price, "reason": exit_reason, "pnl_sek": pnl_sek,
-        })
+        if order_ok:
+            # Only close the DB trade and return cash once the sell executes,
+            # so the DB never marks a position closed that Saxo still holds.
+            db.close_trade(trade["id"], last_price, exit_reason, pnl_sek, comm)
+            record_fill(trade.get("shares", 0) * price_sek)
+            todays_actions.append({
+                "action": "EXIT", "ticker": ticker, "market_group": mkt,
+                "score": decision.score if decision else 0,
+                "shares": trade.get("shares", 0),
+                "price": last_price, "reason": exit_reason, "pnl_sek": pnl_sek,
+            })
+        else:
+            # Sell not placed — leave the position open and retry next cycle.
+            todays_actions.append({
+                "action": "EXIT(FAILED)", "ticker": ticker, "market_group": mkt,
+                "score": decision.score if decision else 0,
+                "shares": trade.get("shares", 0),
+                "price": last_price, "reason": exit_reason, "pnl_sek": None,
+            })
         db.insert_signal({
             "signal_date": date.today().isoformat(), "market_group": mkt,
             "ticker": ticker, "final_score": decision.score if decision else 0,
@@ -358,7 +375,8 @@ def run_cycle():
         for ticker, decision in buy_candidates:
             if ticker not in feat_data:
                 continue
-            last_row = feat_data[ticker].iloc[-1]
+            df_full  = feat_data[ticker]
+            last_row = df_full.iloc[-1]
             mkt      = market_of(ticker)
             rate     = fx.get_rate_to_sek(_currency_for(mkt))
 
@@ -370,29 +388,34 @@ def run_cycle():
             entry_sek = entry_price * rate
             atr_sek   = atr_raw * rate
 
+            # ── ATOS v3 consensus gate ────────────────────────────────
+            # The weighted detector score qualified this candidate; now
+            # require a multi-strategy quorum before risking capital.
+            if REQUIRE_CONSENSUS:
+                consensus = consensus_evaluate(
+                    df_full, mkt,
+                    min_agreement=CONSENSUS_MIN_AGREEMENT,
+                    weights=weights,
+                )
+                if consensus.final_action != "BUY":
+                    reason = (f"consensus {consensus.agreement_count}/"
+                              f"{consensus.total_strategies} (need "
+                              f"{CONSENSUS_MIN_AGREEMENT})")
+                    _log_buy_signal(mkt, ticker, decision, 0, reason)
+                    todays_actions.append({
+                        "action": "BLOCKED", "ticker": ticker, "market_group": mkt,
+                        "score": decision.score, "shares": 0,
+                        "price": entry_price, "reason": reason, "pnl_sek": None,
+                    })
+                    continue
+
             approval = risk.approve_entry(
                 ticker, mkt, decision.score,
                 entry_sek, atr_sek, cash_sek
             )
 
-            db.insert_signal({
-                "signal_date": date.today().isoformat(), "market_group": mkt,
-                "ticker": ticker, "final_score": decision.score,
-                "d1_trend": decision.d1_trend,
-                "d2_momentum": decision.d2_momentum,
-                "d3_breakout": decision.d3_breakout,
-                "d4_mean_revert": decision.d4_mean_revert,
-                "d5_volume": decision.d5_volume,
-                "d6_smart_money": getattr(decision, 'd6_smart_money', 0) if decision else 0,
-                "d7_mom_quality": getattr(decision, 'd7_mom_quality', 0) if decision else 0,
-                "d8_regime": getattr(decision, 'd8_regime', 0) if decision else 0,
-                "regime": getattr(decision, 'regime', 'unknown') if decision else 'unknown',
-                "action": "BUY",
-                "executed": 1 if approval["approved"] else 0,
-                "block_reason": None if approval["approved"] else approval["reason"],
-            })
-
             if not approval["approved"]:
+                _log_buy_signal(mkt, ticker, decision, 0, approval["reason"])
                 todays_actions.append({
                     "action": "BLOCKED", "ticker": ticker, "market_group": mkt,
                     "score": decision.score, "shares": 0,
@@ -405,52 +428,68 @@ def run_cycle():
             cost_sek  = approval["cost_sek"]
             comm_sek  = approval["comm_sek"]
 
-            order_ok = False
+            # ── Resolve Saxo UIC and sanity-check the mapping ─────────
+            order_ok    = False
+            skip_reason = None
             try:
                 from instrument_map import load_instrument_map
                 imap = load_instrument_map()
-                if ticker in imap:
+                if ticker not in imap:
+                    skip_reason = "not in instrument_map.csv"
+                elif imap[ticker]["currency"] != _currency_for(mkt):
+                    # e.g. SAP.DE mapped to a USD NYSE listing — refuse to
+                    # trade the wrong instrument in the wrong currency.
+                    skip_reason = (f"currency mismatch "
+                                   f"{imap[ticker]['currency']}!={_currency_for(mkt)}")
+                else:
                     uic = imap[ticker]["uic"]
                     asset_type = ASSET_TYPE_MAP.get(mkt, "Stock")
                     saxo_client.place_market_order(uic, asset_type, "Buy", shares)
                     order_ok = True
-                else:
-                    print(f"  [SKIP BUY] {ticker}: not in instrument_map.csv")
             except Exception as e:
-                print(f"  BUY order failed {ticker}: {e}")
-
-            trade_id = db.insert_trade({
-                "market_group": mkt, "ticker": ticker, "direction": "BUY",
-                "entry_date": date.today().isoformat(),
-                "entry_price": entry_price,
-                "shares": shares,
-                "commission_sek": comm_sek,
-                "entry_score": decision.score,
-                "d1_trend": decision.d1_trend,
-                "d2_momentum": decision.d2_momentum,
-                "d3_breakout": decision.d3_breakout,
-                "d4_mean_revert": decision.d4_mean_revert,
-                "d5_volume": decision.d5_volume,
-                "d6_smart_money": getattr(decision, 'd6_smart_money', 0) if decision else 0,
-                "d7_mom_quality": getattr(decision, 'd7_mom_quality', 0) if decision else 0,
-                "d8_regime": getattr(decision, 'd8_regime', 0) if decision else 0,
-                "stop_price": stop_p,
-                "trailing_stop_high": entry_price,
-                "regime_at_entry": getattr(decision, 'regime', 'unknown') if decision else 'unknown',
-            })
+                skip_reason = f"order error: {e}"
 
             if order_ok:
+                # Record the position ONLY after Saxo accepts the order, so
+                # the DB never shows a phantom fill Saxo doesn't have.
+                db.insert_trade({
+                    "market_group": mkt, "ticker": ticker, "direction": "BUY",
+                    "entry_date": date.today().isoformat(),
+                    "entry_price": entry_price,
+                    "shares": shares,
+                    "commission_sek": comm_sek,
+                    "entry_score": decision.score,
+                    "d1_trend": decision.d1_trend,
+                    "d2_momentum": decision.d2_momentum,
+                    "d3_breakout": decision.d3_breakout,
+                    "d4_mean_revert": decision.d4_mean_revert,
+                    "d5_volume": decision.d5_volume,
+                    "d6_smart_money": getattr(decision, 'd6_smart_money', 0),
+                    "d7_mom_quality": getattr(decision, 'd7_mom_quality', 0),
+                    "d8_regime": getattr(decision, 'd8_regime', 0),
+                    "stop_price": stop_p,
+                    "trailing_stop_high": entry_price,
+                    "regime_at_entry": getattr(decision, 'regime', 'unknown'),
+                })
                 record_fill(-cost_sek)
                 cash_sek -= cost_sek
                 risk.register_fill(mkt)
                 open_tickers.add(ticker)
-
-            todays_actions.append({
-                "action": "BUY" if order_ok else "BUY(LOGGED)",
-                "ticker": ticker, "market_group": mkt,
-                "score": decision.score, "shares": shares,
-                "price": entry_price, "reason": "signal", "pnl_sek": None,
-            })
+                _log_buy_signal(mkt, ticker, decision, 1, None)
+                todays_actions.append({
+                    "action": "BUY", "ticker": ticker, "market_group": mkt,
+                    "score": decision.score, "shares": shares,
+                    "price": entry_price, "reason": "signal", "pnl_sek": None,
+                })
+            else:
+                # No order placed → no DB position. Log the attempt only.
+                print(f"  [SKIP BUY] {ticker}: {skip_reason}")
+                _log_buy_signal(mkt, ticker, decision, 0, skip_reason)
+                todays_actions.append({
+                    "action": "BLOCKED", "ticker": ticker, "market_group": mkt,
+                    "score": decision.score, "shares": 0,
+                    "price": entry_price, "reason": skip_reason, "pnl_sek": None,
+                })
 
     # ── 7. Learning pass ──────────────────────────────────────────
     print("  Running learning pass...")
@@ -480,7 +519,8 @@ def run_cycle():
     })
 
     # ── 9. Terminal output ────────────────────────────────────────
-    current_regime = next(iter(decisions.values())).regime if decisions else "unknown"
+    _first = next(iter(decisions.values()), None)
+    current_regime = getattr(_first, "regime", "unknown") if _first is not None else "unknown"
     print_banner(total_equity, day_start, len(open_trades_now),
                  weights, todays_actions, learning_result, current_regime)
 
@@ -500,6 +540,27 @@ def run_cycle():
     upload_dashboard(html_file)
 
     print("\nCycle complete.\n")
+
+
+def _log_buy_signal(mkt: str, ticker: str, decision, executed: int, block_reason):
+    """Record a BUY signal attempt in the signals table (executed reflects
+    whether an order was actually placed, not merely whether it was approved)."""
+    db.insert_signal({
+        "signal_date": date.today().isoformat(), "market_group": mkt,
+        "ticker": ticker, "final_score": decision.score,
+        "d1_trend": decision.d1_trend,
+        "d2_momentum": decision.d2_momentum,
+        "d3_breakout": decision.d3_breakout,
+        "d4_mean_revert": decision.d4_mean_revert,
+        "d5_volume": decision.d5_volume,
+        "d6_smart_money": getattr(decision, 'd6_smart_money', 0),
+        "d7_mom_quality": getattr(decision, 'd7_mom_quality', 0),
+        "d8_regime": getattr(decision, 'd8_regime', 0),
+        "regime": getattr(decision, 'regime', 'unknown'),
+        "action": "BUY",
+        "executed": executed,
+        "block_reason": block_reason,
+    })
 
 
 def _currency_for(market_group: str) -> str:
